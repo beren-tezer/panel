@@ -6865,11 +6865,17 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
     previewOnly: actor.id !== realUserId && !allowImpersonation,
   }), [ctxState, dispatch, brandsById, commentCount, attachmentsByTask, revisionByTask, notify, updateTask, openTask, copyLink, media, actor, role, allowed, statusOptions, selectedBrandId, brandKit, realUserId, allowImpersonation, checklistsOn, checklistApi, checklistIndex, ensureChecklist, submitTask, contentApi, state.features]);
 
-  /* Müşteri onay bağlantısı (/musteri/<adres>): adres yalnızca yönlendirir, yetki vermez. Markayı kullanıcı zaten
+  /* Müşteri onay bağlantısı (/onay/<adres>, /onay): adres yalnızca yönlendirir, yetki vermez. Markayı kullanıcı zaten
      görebiliyorsa (RLS) o markanın onay ekranı açılır; aksi halde — marka var olsun ya da olmasın — aynı mesaj gösterilir. */
   const [portal, setPortal] = useState(() => (portalSlug == null ? null : { slug: portalSlug, status: "pending" }));
   useEffect(() => {
     if (!portal || portal.status !== "pending") return;
+    if (portal.slug === "*") { // /onay: tüm markaların onay ekranı
+      setSelectedBrandId("all");
+      setPageRaw(role === "client" ? "pending" : "approvals");
+      setPortal({ ...portal, status: "ok" });
+      return;
+    }
     const brand = portal.slug ? view.brands.find((b) => b.slug === portal.slug) : null;
     if (!brand) { setPortal({ ...portal, status: "denied" }); return; }
     setSelectedBrandId(brand.id);

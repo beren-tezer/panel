@@ -4,7 +4,7 @@
 -- çalıştırın. 007'den sonra müşteri kararı yalnızca bir onay isteğine (ve onun sürümüne) verilebilir.
 --
 -- Model:
---   brands.slug                 Müşteri onay bağlantısı: /musteri/<slug>. Yalnızca yönlendirme içindir, YETKİ VERMEZ —
+--   brands.slug                 Müşteri onay bağlantısı: /onay/<slug>. Yalnızca yönlendirme içindir, YETKİ VERMEZ —
 --                               sayfa giriş ister ve marka üyeliğiyle (brand_members) açılır. Yenilenince eski adres çözülmez.
 --   task_content_versions       Görevin teslim sürümleri (v1, v2 …). Müşteriye gönderilince kilitlenir (locked_at);
 --                               kilitli sürümün metni ve dosyaları değiştirilemez / silinemez.
@@ -414,5 +414,5 @@ commit;
 
 -- Kontroller (isteğe bağlı):
 --   select relname, relrowsecurity from pg_class where relname in ('task_content_versions', 'task_content_assets', 'approval_requests');
---   select slug, name from public.brands order by name;                -- müşteri onay bağlantıları: /musteri/<slug>
+--   select slug, name from public.brands order by name;                -- müşteri onay bağlantıları: /onay/<slug>
 --   select id, public, file_size_limit from storage.buckets where id = 'content-assets';

@@ -12,7 +12,8 @@
     "test:ui:kit": "node --experimental-websocket tests/ui-brandkit.mjs",
     "test:ui:checklist": "node --experimental-websocket tests/ui-checklist.mjs",
     "test:ui:bulk": "node --experimental-websocket tests/ui-bulk.mjs",
-    "test:bulk:dev": "node --experimental-websocket tests/bulk-supabase.mjs"
+    "test:bulk:dev": "node --experimental-websocket tests/bulk-supabase.mjs",
+    "test:ui:approvals": "node --experimental-websocket tests/ui-approvals.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",

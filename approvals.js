@@ -98,10 +98,13 @@ export function rotatedSlug(name) {
   return `${slugify(name).slice(0, 40)}-${[...bytes].map((b) => b.toString(36).padStart(2, "0")).join("").slice(0, 7)}`;
 }
 
-export const PORTAL_PREFIX = "/musteri/";
-export const portalPath = (slug) => `${PORTAL_PREFIX}${encodeURIComponent(slug)}`;
+export const PORTAL_PREFIX = "/onay/";
+export const portalPath = (slug) => (slug ? `${PORTAL_PREFIX}${encodeURIComponent(slug)}` : "/onay");
+/* /onay → "*" (tüm markalar), /onay/<adres> → adres, geçersiz adres → "" (erişim yok mesajı), başka yol → null. */
 export function parsePortalPath(pathname) {
-  const m = String(pathname || "").match(/\/musteri\/([^/?#]+)\/?$/);
+  const p = String(pathname || "");
+  if (/^\/onay\/?$/.test(p)) return "*";
+  const m = p.match(/^\/onay\/([^/?#]+)\/?$/);
   if (!m) return null;
   try { const slug = decodeURIComponent(m[1]).toLowerCase(); return isValidSlug(slug) ? slug : ""; } catch { return ""; }
 }

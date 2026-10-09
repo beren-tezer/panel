@@ -1,0 +1,34 @@
+# AgencyOS — Apache / SiteGround (public_html)
+# Vite bu dosyayı derlemede dist/ klasörüne kopyalar; dist/ içeriğiyle birlikte public_html'e yüklenir.
+
+# HTTP → HTTPS (önce yönlendirilir)
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{HTTPS} off
+  RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+</IfModule>
+
+# Tek sayfalı uygulama: /onay ve /onay/<marka-adresi> gibi yollar index.html'e yönlendirilir
+# (gerçek dosyalar ve klasörler olduğu gibi sunulur).
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  RewriteRule ^index\.html$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
+</IfModule>
+
+# Güvenlik başlıkları
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "DENY"
+  # Bağlantılar başka sitelere tam adresle (marka adresi dahil) gönderilmez.
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"
+  Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+  # index.html önbelleğe alınmaz (yeni sürüm hemen görünür); /assets/ dosyaları içerik özetli adla sürümlüdür.
+  <FilesMatch "index\.html$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>

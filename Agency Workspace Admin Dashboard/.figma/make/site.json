@@ -1,0 +1,10 @@
+{
+  "description": "Dijital ajanslar için tasarlanmış operasyon merkezi, iş akışlarını, onayları ve teslim tarihlerini hızlıca takip ederek yönetimi kolaylaştırır.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

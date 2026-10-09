@@ -1,0 +1,10 @@
+{
+  "description": "Streamline social media content planning for digital marketing agencies with a comprehensive, user-friendly interface designed for efficient collaboration and management.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

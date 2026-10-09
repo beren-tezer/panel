@@ -1,0 +1,3 @@
+/* Yalnızca panel dosyası taranır; yan klasörlerdeki eski prototipler CSS'e girmez. */
+@import "tailwindcss" source(none);
+@source "../AgencyWorkspace.jsx";

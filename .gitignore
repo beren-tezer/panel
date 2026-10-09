@@ -1,0 +1,10 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+
+# Git öncesi elle alınan değişiklik yedekleri (geçmiş artık Git'te)
+*.pre-*.js
+*.pre-*.jsx
+*.backup.jsx

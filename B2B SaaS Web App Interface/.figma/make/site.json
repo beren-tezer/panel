@@ -1,0 +1,10 @@
+{
+  "description": "Streamline agency operations with a modern B2B SaaS platform designed for digital marketing teams, enhancing task management and collaboration across brands.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

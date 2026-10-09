@@ -11,6 +11,7 @@
  */
 
 import { LOCKED_STATUSES, REVIEW_STATUSES, currentChecklist, incompleteMessage, missingForSubmit } from "./checklist.js";
+import { pendingRequest, validateRevisionNote } from "./approvals.js";
 
 export const ROLES = ["admin", "employee", "client"];
 export const ROLE_LABELS = { admin: "Admin", employee: "Çalışan", client: "Müşteri" };
@@ -165,7 +166,26 @@ export function scopeState(user, state) {
     // Kontrol listeleri, notlar ve kalite kontrol geçmişi ekip içidir; müşteriye hiç verilmez (006 RLS).
     checklists: isClient ? [] : (state.checklists || []).filter((c) => taskIds.has(c.taskId)),
     checklistItems: isClient ? [] : (state.checklistItems || []).filter((i) => taskIds.has(i.taskId)),
+    ...scopeContent(isClient, taskIds, state),
   };
+}
+
+/* İçerik sürümleri (007 RLS ile aynı): ekip görevin tüm sürümlerini görür; müşteri yalnızca kendisine gönderilmiş
+   (bir onay isteğine bağlı) sürümleri, onların dosyalarını ve isteklerini görür. Taslaklar müşteriye hiç verilmez. */
+function scopeContent(isClient, taskIds, state) {
+  const requests = (state.approvalRequests || []).filter((r) => taskIds.has(r.taskId));
+  const sent = new Set(requests.map((r) => r.versionId));
+  const visible = (v) => taskIds.has(v.taskId) && (!isClient || sent.has(v.id));
+  const versions = (state.contentVersions || []).filter(visible);
+  const versionIds = new Set(versions.map((v) => v.id));
+  return { approvalRequests: requests, contentVersions: versions, contentAssets: (state.contentAssets || []).filter((a) => versionIds.has(a.versionId)) };
+}
+
+/* Taslak sürümde metin / dosya değişikliği: admin veya görevin sorumlusu ("İçerik düzenleme" izniyle). */
+export function canEditContentVersion(user, task, state) {
+  if (!task || !canSeeTask(user, task, state)) return false;
+  const p = permissionsFor(user);
+  return roleOf(user) === "admin" || (roleOf(user) === "employee" && p.has("canEditContent") && task.assigneeId === user.id);
 }
 
 /* ───────────────────────── İşlem yetkilendirme ───────────────────────── */
@@ -247,8 +267,15 @@ export function authorize(user, action, state, allStatuses) {
       const t = seeTask(action.taskId);
       if (!t) return DENIED;
       if (t.status !== STATUS.CLIENT_REVIEW) return "Bu içerik şu anda onay beklemiyor.";
+      // 007: karar yalnızca bekleyen onay isteğine ve onun sürümüne verilebilir (eski sürüm / eski istek reddedilir).
+      if (state.features?.approvals) {
+        const req = pendingRequest(state.approvalRequests || [], t.id);
+        if (!req) return "Bu içerik şu anda onay beklemiyor.";
+        if (action.requestId && action.requestId !== req.id) return "Bu onay isteği artık geçerli değil; içerik güncellenmiş. Lütfen sayfayı yenileyip güncel sürümü inceleyin.";
+        if (action.versionId && action.versionId !== req.versionId) return "Eski bir sürüme karar verilemez; lütfen güncel sürümü inceleyin.";
+      }
       if (action.decision === "approved") return p.has("canApproveContent") ? null : DENIED;
-      if (action.decision === "revision") return p.has("canRequestRevision") && action.note?.trim() ? null : "Revize talebi için açıklama yazın.";
+      if (action.decision === "revision") return !p.has("canRequestRevision") ? DENIED : validateRevisionNote(action.note) || null;
       return DENIED;
     }
     case "MARK_NOTIFICATIONS_READ":
@@ -266,6 +293,13 @@ export function authorize(user, action, state, allStatuses) {
     case "TOGGLE_CHECK":
     case "SET_CHECK_NOTE":
       return checklistEditReason(user, state, action);
+    case "UPDATE_VERSION": {
+      const v = (state.contentVersions || []).find((x) => x.id === action.id);
+      if (!v) return "Sürüm bulunamadı.";
+      if (v.lockedAt) return "Müşteriye gönderilmiş sürüm değiştirilemez; yeni sürüm oluşturun.";
+      if (String(action.patch.caption ?? "").length > 5000) return "Metin en fazla 5000 karakter olabilir.";
+      return canEditContentVersion(user, state.tasks.find((t) => t.id === v.taskId), state) ? null : DENIED;
+    }
     default:
       return null;
   }

@@ -14,6 +14,7 @@
  *                                    (null ise açıklama görselleri metne gömülür — yalnızca demo)
  *   brandKit?                      → marka kılavuzu API'si (bkz. brandKit.js)
  *   checklist?                     → kontrol listesi şablon/geçmiş API'si (bkz. checklist.js)
+ *   content?                       → içerik sürümleri: createVersion / upload / removeAsset / urls / refresh (bkz. approvals.js)
  *
  *   createTasks(tasks, { activity, notifications }) → { codes: { taskId: "CW-…" }, checklists, checklistItems }
  *                                  Toplu görev girişi: iyimser değil, sonucu beklenir. Tek istekte (tek işlem) yazılır;
@@ -26,6 +27,7 @@
  */
 
 import { createSupabaseBrandKit } from "./brandKit.js";
+import { CONTENT_BUCKET, MAX_CONTENT_BYTES, latestVersion, pendingRequest, validateContentFile } from "./approvals.js";
 import {
   checklistError, createSupabaseChecklist, currentChecklist, incompleteMessage, isMissingRelation, itemsOf, missingForSubmit,
   rowToChecklist, rowToChecklistItem, startRevisionCycle,
@@ -46,11 +48,12 @@ function newActivity(prev, next) {
 
 /* ───────────────────────── Demo (bellek içi) kaynak ───────────────────────── */
 
-export function createMemorySource(buildDemo, { checklist = null } = {}) {
+export function createMemorySource(buildDemo, { checklist = null, content = null } = {}) {
   let taskNo = 1000;
   const created = new Map(); // görev kimliği → kod (tekrar denemede aynı kod)
   return {
     draftScope: "demo",
+    content,
     async createTasks(tasks) {
       await new Promise((r) => setTimeout(r, 120));
       // Yalnızca demo: tarayıcı testlerinde ağ hatasını taklit etmek için (window.__cwSimulateSaveError = true).
@@ -80,9 +83,34 @@ export function createMemorySource(buildDemo, { checklist = null } = {}) {
     async persist(action, prev, next, { patchTask, merge, actorId }) {
       if (action.type === "ADD_TASK") patchTask(action.task.id, { code: taskCode(++taskNo) });
       if (action.type === "ADD_TASKS") action.tasks.forEach((t) => patchTask(t.id, { code: taskCode(++taskNo) }));
+      if (content) emulateApprovalServer(action, prev, next, merge, actorId);
       if (checklist) emulateChecklistServer(checklist, action, prev, next, merge, actorId);
     },
   };
+}
+
+/* Demo: 007'deki onay isteği kuralları (müşteriye gönderimde sürüm kilitleme + istek, karar, geri çekme). */
+function emulateApprovalServer(action, prev, next, merge, actorId) {
+  const now = new Date().toISOString();
+  const uid = () => globalThis.crypto.randomUUID();
+  if (action.type === "SUBMIT_TASK" && action.status === "Müşteri Onayı") {
+    let v = latestVersion(prev.contentVersions, action.id);
+    const versions = [];
+    if (!v) { v = { id: uid(), taskId: action.id, versionNo: 1, caption: "", createdBy: actorId, createdAt: now, updatedAt: now, lockedAt: null }; }
+    versions.push({ ...v, lockedAt: v.lockedAt || now });
+    const closed = prev.approvalRequests.filter((r) => r.taskId === action.id && r.status === "pending").map((r) => ({ ...r, status: "superseded", closedAt: now }));
+    merge({ contentVersions: versions, approvalRequests: [...closed, { id: uid(), taskId: action.id, versionId: v.id, status: "pending", requestedBy: actorId, requestedAt: now, closedAt: null }] });
+  }
+  if (action.type === "REVIEW_CONTENT") {
+    const r = pendingRequest(prev.approvalRequests, action.taskId);
+    if (!r) throw new Error("Bu içerik şu anda onay beklemiyor.");
+    if (action.requestId && action.requestId !== r.id) throw new Error("Bu onay isteği artık geçerli değil (içerik güncellenmiş veya karar verilmiş).");
+    merge({ approvalRequests: [{ ...r, status: action.decision === "approved" ? "approved" : "revision_requested", closedAt: now }] });
+  }
+  if (action.type === "UPDATE_TASK" && action.patch.status && action.patch.status !== "Müşteri Onayı") {
+    const r = pendingRequest(prev.approvalRequests, action.id);
+    if (r) merge({ approvalRequests: [{ ...r, status: "withdrawn", closedAt: now }] });
+  }
 }
 
 /* Demo: 006'daki tetikleyici ve fonksiyonların bellek içi karşılığı (yeni görev, revizyon döngüsü, format değişikliği,
@@ -185,9 +213,9 @@ const taskToRow = (t) => {
   return row;
 };
 
-const rowToBrand = (r) => ({ id: r.id, name: r.name, initials: r.initials, sector: r.sector, color: r.color, driveFolderId: r.drive_folder_id, status: r.status || "active" });
+const rowToBrand = (r) => ({ id: r.id, name: r.name, initials: r.initials, sector: r.sector, color: r.color, driveFolderId: r.drive_folder_id, status: r.status || "active", slug: r.slug || null });
 const brandToRow = (b) => ({ id: b.id, name: b.name, initials: b.initials, sector: b.sector, color: b.color, drive_folder_id: b.driveFolderId || null, status: b.status || "active" });
-const BRAND_COLUMNS = { name: "name", initials: "initials", sector: "sector", color: "color", driveFolderId: "drive_folder_id", status: "status" };
+const BRAND_COLUMNS = { name: "name", initials: "initials", sector: "sector", color: "color", driveFolderId: "drive_folder_id", status: "status", slug: "slug" };
 
 const rowToAsset = (r) => ({
   id: r.id, brandId: r.brand_id, folderId: r.folder_id, name: r.name, type: r.type, thumbnail: r.thumbnail_url,
@@ -218,8 +246,20 @@ const USER_COLUMNS = { name: "full_name", title: "role_title", role: "role", com
 
 const membershipId = (brandId, userId) => `${brandId}:${userId}`;
 const rowToMembership = (r) => ({ id: membershipId(r.brand_id, r.user_id), brandId: r.brand_id, userId: r.user_id });
-const rowToApproval = (r) => ({ id: r.id, taskId: r.task_id, userId: r.user_id, decision: r.decision, note: r.note || "", link: r.link || "", createdAt: r.created_at });
-const approvalToRow = (a) => ({ id: a.id, task_id: a.taskId, user_id: a.userId, decision: a.decision, note: a.note || "", link: a.link || null, created_at: a.createdAt });
+const rowToApproval = (r) => ({
+  id: r.id, taskId: r.task_id, userId: r.user_id, decision: r.decision, note: r.note || "", link: r.link || "", createdAt: r.created_at,
+  requestId: r.request_id || null, versionId: r.version_id || null,
+});
+const approvalToRow = (a) => {
+  const row = { id: a.id, task_id: a.taskId, user_id: a.userId, decision: a.decision, note: a.note || "", link: a.link || null, created_at: a.createdAt };
+  // 007 sütunları yalnızca değer varsa yazılır (007 öncesi şemayla uyumlu).
+  if (a.requestId) row.request_id = a.requestId;
+  if (a.versionId) row.version_id = a.versionId;
+  return row;
+};
+export const rowToVersion = (r) => ({ id: r.id, taskId: r.task_id, versionNo: r.version_no, caption: r.caption || "", createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at, lockedAt: r.locked_at });
+export const rowToContentAsset = (r) => ({ id: r.id, versionId: r.version_id, taskId: r.task_id, storagePath: r.storage_path, fileName: r.file_name, mimeType: r.mime_type, fileSize: r.file_size, sortOrder: r.sort_order, createdBy: r.created_by, createdAt: r.created_at });
+export const rowToRequest = (r) => ({ id: r.id, taskId: r.task_id, versionId: r.version_id, status: r.status, requestedBy: r.requested_by, requestedAt: r.requested_at, closedAt: r.closed_at });
 const rowToNotification = (r) => ({ id: r.id, userId: r.user_id, taskId: r.task_id, kind: r.kind, text: r.text, createdAt: r.created_at, readAt: r.read_at });
 const notificationToRow = (n) => ({ id: n.id, user_id: n.userId, task_id: n.taskId || null, kind: n.kind, text: n.text, created_at: n.createdAt });
 
@@ -246,6 +286,12 @@ const LIVE_TABLES = {
   brand_members: ["memberships", (r) => rowToMembership(r)],
   approvals: ["approvals", (r) => rowToApproval(r)],
   notifications: ["notifications", (r) => rowToNotification(r)],
+};
+/* 007 çalıştırıldıysa ayrıca dinlenen tablolar. */
+const APPROVAL_LIVE_TABLES = {
+  task_content_versions: ["contentVersions", (r) => rowToVersion(r)],
+  task_content_assets: ["contentAssets", (r) => rowToContentAsset(r)],
+  approval_requests: ["approvalRequests", (r) => rowToRequest(r)],
 };
 /* 006 çalıştırıldıysa (tablolar varsa) ayrıca dinlenen tablolar. */
 const CHECKLIST_LIVE_TABLES = {
@@ -349,6 +395,14 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
     try { merge(await checklistApi.refresh(taskId)); } catch (err) { console.warn("Kontrol listesi yenilenemedi:", err.message); }
   };
 
+  /* 007 (içerik sürümleri / onay istekleri) var mı. */
+  let approvalsAvailable = false;
+  const contentApi = createSupabaseContent(supabase, storage, () => approvalsAvailable);
+  const refreshContent = async (taskId, merge) => {
+    if (!approvalsAvailable) return;
+    try { merge(await contentApi.refresh(taskId)); } catch (err) { console.warn("İçerik sürümleri yenilenemedi:", err.message); }
+  };
+
   const write = async (action, prev, next, { patchTask, reload, merge }) => {
     const activity = newActivity(prev, next);
     const notifications = action.type === "MARK_NOTIFICATIONS_READ" ? [] : added(prev.notifications, next.notifications);
@@ -375,17 +429,28 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
         }
         // Revizyon döngüsü, format/marka değişikliği ve listenin açılıp kapanması sunucu tetikleyicisiyle işlenir.
         if (row.status === "Revizyon" || "format" in row || "brand_id" in row || "checklist_disabled" in row) await refreshChecklist(action.id, merge);
+        if ("status" in row) await refreshContent(action.id, merge); // onaydan geri çekme → istek "withdrawn"
+        break;
+      }
+      case "UPDATE_VERSION": {
+        touch("task_content_versions", action.id);
+        const saved = mustCl(await supabase.from("task_content_versions").update({ caption: action.patch.caption }).eq("id", action.id).select().single());
+        touch("task_content_versions", action.id);
+        merge({ contentVersions: [rowToVersion(saved)] });
         break;
       }
       case "SUBMIT_TASK": {
         // Yetki + zorunlu kontrol doğrulaması + durum değişikliği sunucuda tek işlemde (006 submit_task_for_approval).
         touch("tasks", action.id);
-        const { error } = await supabase.rpc("submit_task_for_approval", { p_task: action.id, p_status: action.status, p_reason: action.reason || null });
+        const args = { p_task: action.id, p_status: action.status, p_reason: action.reason || null };
+        if (approvalsAvailable && action.versionId) args.p_version = action.versionId;
+        const { error } = await supabase.rpc("submit_task_for_approval", args);
         if (error) {
           if (!checklistsAvailable && isMissingRelation(error)) must(await supabase.from("tasks").update({ status: action.status }).eq("id", action.id)); // 006 öncesi
           else throw checklistError(error);
         }
         touch("tasks", action.id);
+        await refreshContent(action.id, merge); // sürüm kilitlendi, onay isteği oluştu
         break;
       }
       case "TOGGLE_CHECK":
@@ -418,9 +483,11 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
       case "REMOVE_ATTACHMENT":
         must(await supabase.from("attachments").delete().eq("id", action.id));
         break;
-      case "ADD_BRAND":
-        must(await supabase.from("brands").insert(brandToRow(action.brand)));
+      case "ADD_BRAND": {
+        const saved = must(await supabase.from("brands").insert(brandToRow(action.brand)).select().single());
+        merge({ brands: [rowToBrand(saved)] }); // sunucunun ürettiği bağlantı adresi (007)
         break;
+      }
       case "ADD_ASSET":
         must(await supabase.from("assets").insert(assetToRow(action.asset)));
         break;
@@ -436,8 +503,12 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
       case "REVIEW_CONTENT": {
         // Görev durumu veritabanında apply_approval tetikleyicisiyle güncellenir.
         const approval = added(prev.approvals, next.approvals)[0];
-        if (approval) must(await supabase.from("approvals").insert(approvalToRow(approval)));
+        if (approval) {
+          const { error } = await supabase.from("approvals").insert(approvalToRow(approval));
+          if (error) throw checklistError(error); // eski sürüm / geçersiz istek / çift karar: anlamlı mesaj
+        }
         touch("tasks", action.taskId);
+        await refreshContent(action.taskId, merge);
         if (action.decision === "revision") await refreshChecklist(action.taskId, merge); // yeni revizyon döngüsü
         break;
       }
@@ -462,11 +533,14 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
       case "SET_BRAND_MEMBERS":
         await syncMemberships(prev, next);
         break;
-      case "UPDATE_BRAND":
+      case "UPDATE_BRAND": {
         touch("brands", action.id);
-        must(await supabase.from("brands").update(toColumns(action.patch, BRAND_COLUMNS)).eq("id", action.id));
+        const res = await supabase.from("brands").update(toColumns(action.patch, BRAND_COLUMNS)).eq("id", action.id).select().single();
+        if (res.error) throw res.error.code === "23505" ? new Error("Bu bağlantı adresi başka bir markada kullanılıyor.") : res.error;
         touch("brands", action.id);
+        merge({ brands: [rowToBrand(res.data)] });
         break;
+      }
       case "MARK_NOTIFICATIONS_READ": {
         const readAt = new Date().toISOString();
         must(await supabase.from("notifications").update({ read_at: readAt }).in("id", action.ids));
@@ -508,6 +582,7 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
     brandKit: createSupabaseBrandKit(supabase, storage),
     // Kontrol listesi şablonları ve geçmişi ihtiyaç olduğunda yüklenir; görev listeleri açılış yüküne dahildir.
     checklist: checklistApi,
+    content: contentApi,
     // Taslaklar Supabase projesi bazında ayrılır (geliştirme ve canlı projelerin taslakları karışmaz).
     draftScope: (() => { try { return new URL(storage.url).host; } catch { return "supabase"; } })(),
 
@@ -547,7 +622,7 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
       let wasSubscribed = false;
       let broken = false;
       const channel = supabase.channel("agency-workspace");
-      const tables = checklistsAvailable ? { ...LIVE_TABLES, ...CHECKLIST_LIVE_TABLES } : LIVE_TABLES;
+      const tables = { ...LIVE_TABLES, ...(checklistsAvailable ? CHECKLIST_LIVE_TABLES : {}), ...(approvalsAvailable ? APPROVAL_LIVE_TABLES : {}) };
       const handle = (table, payload) => {
         const [collection, toItem] = tables[table];
         if (payload.eventType === "DELETE") {
@@ -606,7 +681,7 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
 
       // Kontrol listesi tabloları yoksa (006 çalıştırılmamış) panel onlarsız açılır.
       const optional = (p) => p.catch((err) => { if (isMissingRelation(err)) return null; throw err; });
-      const [profiles, brands, members, tasks, comments, attachments, assets, activity, approvals, notifications, checklists, checklistItems] = await Promise.all([
+      const [profiles, brands, members, tasks, comments, attachments, assets, activity, approvals, notifications, checklists, checklistItems, versions, contentAssets, requests] = await Promise.all([
         selectAll("profiles", "full_name"),
         selectAll("brands", "created_at"),
         selectAll("brand_members", "created_at"),
@@ -619,8 +694,12 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
         selectAll("notifications", "created_at", false),
         optional(selectAll("task_checklist_instances", "created_at")),
         optional(selectAll("task_checklist_items", "sort_order")),
+        optional(selectAll("task_content_versions", "created_at")),
+        optional(selectAll("task_content_assets", "created_at")),
+        optional(selectAll("approval_requests", "requested_at")),
       ]);
       checklistsAvailable = !!checklists && !!checklistItems;
+      approvalsAvailable = !!versions && !!contentAssets && !!requests;
       const me = profiles.find((p) => p.id === session.user.id);
       if (!me || !me.active) throw new Error("Hesabınız ekip üyesi olarak tanımlı değil. Yöneticinizle iletişime geçin.");
 
@@ -644,7 +723,10 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
           activity: activity.map(rowToActivity),
           checklists: checklistsAvailable ? checklists.map(rowToChecklist) : [],
           checklistItems: checklistsAvailable ? checklistItems.map(rowToChecklistItem) : [],
-          features: { checklists: checklistsAvailable },
+          contentVersions: approvalsAvailable ? versions.map(rowToVersion) : [],
+          contentAssets: approvalsAvailable ? contentAssets.map(rowToContentAsset) : [],
+          approvalRequests: approvalsAvailable ? requests.map(rowToRequest) : [],
+          features: { checklists: checklistsAvailable, approvals: approvalsAvailable },
         },
       };
     },
@@ -670,6 +752,83 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
         });
       }
       return flushDescriptions().then(() => enqueue(() => write(action, prev, next, helpers)));
+    },
+  };
+}
+
+/* ───────────────────────── İçerik sürümleri (007) ───────────────────────── */
+
+/* Sürüm oluşturma, dosya yükleme (ilerleme göstergeli), dosya kaldırma ve süreli (imzalı) önizleme adresleri.
+   Yetki ve kilit kuralları sunucuda uygulanır (RLS + tetikleyiciler); burada yalnızca istemci doğrulaması yapılır. */
+export function createSupabaseContent(supabase, cfg = {}, available = () => true) {
+  const fail = (error) => {
+    const m = error?.message || "İşlem tamamlanamadı.";
+    if (["42P01", "PGRST205", "PGRST202"].includes(error?.code)) return new Error("İçerik sürümü tabloları bulunamadı. supabase/007_content_approvals.sql çalıştırılmalı.");
+    if (error?.code === "42501" && /row-level security|permission denied/i.test(m)) return new Error("Bu işlem için yetkiniz yok.");
+    return new Error(m);
+  };
+  const must = ({ data, error }) => { if (error) throw fail(error); return data; };
+  const bucket = () => supabase.storage.from(CONTENT_BUCKET);
+  const refresh = async (taskId) => {
+    const [v, a, r] = await Promise.all([
+      supabase.from("task_content_versions").select("*").eq("task_id", taskId),
+      supabase.from("task_content_assets").select("*").eq("task_id", taskId),
+      supabase.from("approval_requests").select("*").eq("task_id", taskId),
+    ]);
+    return { taskId, contentVersions: must(v).map(rowToVersion), contentAssets: must(a).map(rowToContentAsset), approvalRequests: must(r).map(rowToRequest) };
+  };
+  return {
+    get available() { return available(); },
+    refresh,
+    async createVersion(task) {
+      must(await supabase.rpc("create_content_version", { p_task: task.id }));
+      return refresh(task.id);
+    },
+    async upload(task, version, file, { onProgress } = {}) {
+      const v = validateContentFile(file);
+      if (!v.ok) throw new Error(v.error);
+      const id = globalThis.crypto.randomUUID();
+      const path = `${task.id}/${version.id}/${id}.${v.ext}`;
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Oturumunuz sona ermiş. Tekrar giriş yapın.");
+      // supabase-js yükleme ilerlemesi vermez; Storage REST uç noktasına XHR ile yüklenir (marka kılavuzundaki gibi).
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", `${cfg.url}/storage/v1/object/${CONTENT_BUCKET}/${path}`);
+        xhr.setRequestHeader("Authorization", `Bearer ${session.access_token}`);
+        xhr.setRequestHeader("apikey", cfg.key);
+        xhr.setRequestHeader("Content-Type", v.mime);
+        xhr.setRequestHeader("x-upsert", "false");
+        xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress?.(e.loaded / e.total); };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) { resolve(); return; }
+          let msg = `Yükleme başarısız (${xhr.status}).`;
+          try { const b = JSON.parse(xhr.responseText); msg = b.message || b.error || msg; } catch { /* gövde yok */ }
+          if (xhr.status === 413 || /size|large/i.test(msg)) msg = `Dosya en fazla ${MAX_CONTENT_BYTES / 1024 / 1024} MB olabilir.`;
+          else if (xhr.status === 403 || /security|policy|unauthorized/i.test(msg)) msg = "Bu sürüme dosya ekleme yetkiniz yok (sürüm müşteriye gönderilmiş olabilir).";
+          reject(new Error(msg));
+        };
+        xhr.onerror = () => reject(new Error("Bağlantı hatası: dosya yüklenemedi."));
+        xhr.send(file);
+      });
+      const res = await supabase.from("task_content_assets").insert({
+        id, version_id: version.id, task_id: task.id, storage_path: path, file_name: file.name.slice(0, 255), mime_type: v.mime, file_size: file.size,
+      }).select().single();
+      if (res.error) { await bucket().remove([path]); throw fail(res.error); } // kaydı oluşmayan dosya geride kalmaz
+      onProgress?.(1);
+      return rowToContentAsset(res.data);
+    },
+    async removeAsset(asset) {
+      const rows = must(await supabase.from("task_content_assets").delete().eq("id", asset.id).select("id"));
+      if (!rows.length) throw new Error("Dosya kaldırılamadı: sürüm müşteriye gönderilmiş veya yetkiniz yok.");
+      const { error } = await bucket().remove([asset.storagePath]);
+      if (error) console.warn("Dosya Storage'dan silinemedi:", error.message);
+    },
+    async urls(assets) {
+      if (!assets.length) return {};
+      const rows = must(await bucket().createSignedUrls(assets.map((a) => a.storagePath), 10 * 60));
+      const byPath = Object.fromEntries(rows.filter((r) => r.signedUrl && !r.error).map((r) => [r.path, r.signedUrl]));
+      return Object.fromEntries(assets.filter((a) => byPath[a.storagePath]).map((a) => [a.id, byPath[a.storagePath]]));
     },
   };
 }

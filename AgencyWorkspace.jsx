@@ -11,6 +11,10 @@ import {
   newRow as bulkNewRow, parseTSV as bulkParseTSV, parseTable as bulkParseTable, saveDraft as bulkSaveDraft, setCell as bulkSetCell,
   setValue as bulkSetValueRaw, toTask as bulkToTask, validateRow as bulkValidateRow,
 } from "./bulkTasks.js";
+import {
+  CONTENT_ACCEPT, REQUEST_STATUS, VERSION_STATUS, assetsOf, createMemoryContent, latestVersion, parsePortalPath, portalPath, requestsOf, reviewTarget,
+  rotatedSlug, slugify, validateContentFile, validateRevisionNote, versionStatus, versionsOf,
+} from "./approvals.js";
 import { REVISION_LABELS, deadlineInfo, isPendingRevision, normalizeTime, revisionInfo, wallClock } from "./taskIndicators.js";
 import {
   CHECK_CATEGORIES, CREATIVE_TASK_TYPES, DEFAULT_TEMPLATE_ITEMS, LOCKED_STATUSES, MAX_TEMPLATE_ITEMS, REVIEW_STATUSES, TASK_TYPES,
@@ -19,7 +23,7 @@ import {
 } from "./checklist.js";
 import {
   CLIENT_STATUS_LABELS, PERMISSION_LABELS, ROLE_ALLOWED_TOGGLES, ROLE_DEFAULT_TOGGLES, ROLE_LABELS, ROLE_TITLES, ROLES, STATUS,
-  assignableUsers, authorize, can, canEditBrandKit, canManageChecklists, canViewBrandKit, canViewChecklist, canWorkChecklist, isOpen, permissionsFor, roleOf,
+  assignableUsers, authorize, can, canEditBrandKit, canEditContentVersion, canManageChecklists, canViewBrandKit, canViewChecklist, canWorkChecklist, isOpen, permissionsFor, roleOf,
   scopeBrandKit, scopeState, statusOptionsFor,
 } from "./rbac.js";
 import {
@@ -318,7 +322,7 @@ const SEED_BRANDS = [
   { id: "b-3k", name: "3 Kartal Perde", initials: "3K", sector: "Ev Dekorasyon", color: "amber" },
   { id: "b-velia", name: "Velia Clinic", initials: "VC", sector: "Sağlık & Estetik", color: "violet" },
   { id: "b-gurel", name: "Gürel Altyapı", initials: "GA", sector: "İnşaat", color: "indigo" },
-].map((b, i) => ({ ...b, driveFolderId: `1Cdg${i}${b.initials}x7Kq` }));
+].map((b, i) => ({ ...b, driveFolderId: `1Cdg${i}${b.initials}x7Kq`, slug: slugify(b.name) }));
 
 const SEED_TASKS = [
   ["b-atlas", "Ajans LinkedIn vaka çalışması", "LinkedIn", "Karusel", "u5", "Çalışılıyor", "Orta", 2, 1, "Son üç projeden öne çıkan sonuçların anlatıldığı vaka çalışması."],
@@ -556,7 +560,41 @@ function createDemoState(checklistApi) {
   brands.forEach((b) => { b.status = "active"; });
   const { checklists, checklistItems } = seedChecklists(checklistApi, tasks, approvals, now);
 
-  return { users: DEMO_USERS, me: ME, state: { users: DEMO_USERS, brands, memberships, tasks, comments, attachments, assets, activity, approvals, notifications, checklists, checklistItems } };
+  // İçerik sürümleri (demo): müşteriye gönderilmiş sürümler kilitli; her kararın kendi isteği ve sürümü vardır.
+  const contentVersions = [], contentAssets = [], approvalRequests = [];
+  const addVersion = (t, no, at, locked, files = 2) => {
+    const brand = brandById[t.brandId];
+    const v = { id: uid(), taskId: t.id, versionNo: no, caption: `${t.title}\n\n${brand.name} için hazırlanan paylaşım metni (sürüm ${no}).`, createdBy: t.assigneeId || ME, createdAt: at, updatedAt: at, lockedAt: locked ? at : null };
+    contentVersions.push(v);
+    for (let k = 0; k < files; k++) {
+      contentAssets.push({
+        id: uid(), versionId: v.id, taskId: t.id, storagePath: `${t.id}/${v.id}/${k}.png`, fileName: `${t.format} v${no} — ${k + 1}.png`, mimeType: "image/png",
+        fileSize: 840000 + k * 120000, sortOrder: k, createdBy: v.createdBy, createdAt: at, previewUrl: makeThumb(BRAND_COLORS[brand.color].hex, `${t.format} · Sürüm ${no}`, k + no * 2),
+      });
+    }
+    return v;
+  };
+  tasks.forEach((t) => {
+    const decisions = approvals.filter((a) => a.taskId === t.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    let no = 0;
+    decisions.forEach((a) => {
+      const v = addVersion(t, ++no, new Date(Date.parse(a.createdAt) - 6 * 36e5).toISOString(), true);
+      const r = { id: uid(), taskId: t.id, versionId: v.id, status: a.decision === "approved" ? "approved" : "revision_requested", requestedBy: ME, requestedAt: v.createdAt, closedAt: a.createdAt };
+      approvalRequests.push(r);
+      a.requestId = r.id; a.versionId = v.id;
+    });
+    if (t.status === "Müşteri Onayı") {
+      const v = addVersion(t, ++no, ago(3), true);
+      approvalRequests.push({ id: uid(), taskId: t.id, versionId: v.id, status: "pending", requestedBy: ME, requestedAt: v.createdAt, closedAt: null });
+    } else if (t.status === "Yönetici Onayı" || t.status === "Revizyon" || (decisions.length && t.status === "Çalışılıyor")) {
+      addVersion(t, ++no, ago(1), false, t.status === "Revizyon" ? 0 : 1);
+    }
+  });
+
+  return {
+    users: DEMO_USERS, me: ME,
+    state: { users: DEMO_USERS, brands, memberships, tasks, comments, attachments, assets, activity, approvals, notifications, checklists, checklistItems, contentVersions, contentAssets, approvalRequests },
+  };
 }
 
 /* ───────────────────────── Merkezi durum (reducer) ───────────────────────── */
@@ -576,6 +614,7 @@ function describeField(key, value, state) {
   return value;
 }
 
+const MERGE_COLLECTIONS = ["checklists", "checklistItems", "contentVersions", "contentAssets", "approvalRequests", "brands"];
 /* Sunucudan gelen kontrol listesi kayıtlarını birleştirir; taskId verilirse o görevin kayıtları tümüyle değiştirilir. */
 function mergeById(list = [], incoming = [], taskId) {
   if (taskId) return [...list.filter((x) => x.taskId !== taskId), ...incoming];
@@ -684,16 +723,21 @@ function reducer(state, action) {
         checklistItems: mergeById(state.checklistItems, action.checklistItems || []),
       };
     }
-    case "REMOTE_MERGE":
-      return {
-        ...state,
-        checklists: mergeById(state.checklists, action.checklists, action.taskId),
-        checklistItems: mergeById(state.checklistItems, action.checklistItems, action.taskId),
-      };
+    case "REMOTE_MERGE": {
+      // Sunucunun oluşturduğu / değiştirdiği kayıtlar (yalnızca eylemde bulunan koleksiyonlar; taskId varsa o görevin kayıtları değiştirilir).
+      const out = { ...state };
+      MERGE_COLLECTIONS.forEach((k) => { if (action[k]) out[k] = mergeById(state[k] || [], action[k], k === "brands" ? null : action.taskId); });
+      return out;
+    }
+    case "UPDATE_VERSION":
+      return { ...state, contentVersions: state.contentVersions.map((v) => (v.id === action.id ? { ...v, ...action.patch, updatedAt: now } : v)) };
     case "DELETE_TASK":
       return {
         ...state,
         tasks: state.tasks.filter((t) => t.id !== action.id),
+        contentVersions: (state.contentVersions || []).filter((v) => v.taskId !== action.id),
+        contentAssets: (state.contentAssets || []).filter((a) => a.taskId !== action.id),
+        approvalRequests: (state.approvalRequests || []).filter((r) => r.taskId !== action.id),
         checklists: (state.checklists || []).filter((c) => c.taskId !== action.id),
         checklistItems: (state.checklistItems || []).filter((i) => i.taskId !== action.id),
         comments: state.comments.filter((c) => c.taskId !== action.id),
@@ -707,12 +751,16 @@ function reducer(state, action) {
       if (!task) return state;
       const approved = action.decision === "approved";
       const status = approved ? "Onaylandı" : "Revizyon";
-      const approval = { id: action.id || uid(), taskId: task.id, userId: ME, decision: action.decision, note: (action.note || "").trim(), link: (action.link || "").trim(), createdAt: now };
+      const approval = {
+        id: action.id || uid(), taskId: task.id, userId: ME, decision: action.decision, note: (action.note || "").trim(), link: (action.link || "").trim(), createdAt: now,
+        requestId: action.requestId || null, versionId: action.versionId || null,
+      };
       const who = USER_BY_ID[ME]?.name || "Müşteri";
       const text = approved ? `${who} “${task.title}” içeriğini onayladı.` : `${who} “${task.title}” için revize istedi: ${approval.note}`;
       return {
         ...state,
         tasks: state.tasks.map((t) => (t.id === task.id ? { ...t, status, updatedAt: now } : t)),
+        approvalRequests: (state.approvalRequests || []).map((r) => (r.id === action.requestId && r.status === "pending" ? { ...r, status: approved ? "approved" : "revision_requested", closedAt: now } : r)),
         approvals: [approval, ...state.approvals],
         activity: [log(task.id, approved ? "içeriği onayladı" : `revize talep etti: “${approval.note}”`), ...state.activity],
         notifications: [...makeNotifications([task.assigneeId, ...adminIds(state)], task.id, approved ? "approved" : "revision", text, now), ...state.notifications],
@@ -792,6 +840,9 @@ function reducer(state, action) {
         next.approvals = state.approvals.filter((a) => a.taskId !== action.id);
         next.checklists = (state.checklists || []).filter((c) => c.taskId !== action.id);
         next.checklistItems = (state.checklistItems || []).filter((i) => i.taskId !== action.id);
+        next.contentVersions = (state.contentVersions || []).filter((v) => v.taskId !== action.id);
+        next.contentAssets = (state.contentAssets || []).filter((a) => a.taskId !== action.id);
+        next.approvalRequests = (state.approvalRequests || []).filter((r) => r.taskId !== action.id);
       }
       return next;
     }
@@ -873,7 +924,7 @@ function sortTasks(list, sort, ctx) {
 function makeBrand(name, sector, color, driveFolderId = null) {
   const words = name.trim().split(/\s+/);
   const initials = (words.length > 1 ? words[0][0] + words[1][0] : name.trim().slice(0, 2)).toLocaleUpperCase("tr-TR");
-  return { id: uid(), name: name.trim(), initials, sector: sector || "Yeni Müşteri", color, driveFolderId };
+  return { id: uid(), name: name.trim(), initials, sector: sector || "Yeni Müşteri", color, driveFolderId, slug: slugify(name) };
 }
 
 /* ───────────────────────── Küçük UI parçaları ───────────────────────── */
@@ -2710,6 +2761,8 @@ function TaskDrawer({ task, focus, focusKey, onClose }) {
               />
             </section>
 
+            <ContentVersionsSection task={task} />
+
             <ClientFeedbackSection task={task} sectionRef={feedbackRef} />
 
             <AttachmentsSection task={task} />
@@ -3887,14 +3940,21 @@ function ClientStatusBadge({ status }) {
   return <span className={`inline-flex items-center h-6 px-2 rounded-md border cw-11 font-semibold whitespace-nowrap ${cls}`}>{label}</span>;
 }
 
+/* Kart / detay görseli: görünür en son sürümün ilk görseli → ek küçük resmi → marka renkli yer tutucu. */
 function useContentThumb(task) {
-  const { attachmentsByTask, brandsById } = useWS();
-  return useMemo(() => {
+  const { attachmentsByTask, brandsById, state } = useWS();
+  const cover = useMemo(() => {
+    const v = latestVersion(state.contentVersions || EMPTY, task.id);
+    return v ? assetsOf(state.contentAssets || EMPTY, v.id).find((a) => a.mimeType.startsWith("image/")) || null : null;
+  }, [state.contentVersions, state.contentAssets, task.id]);
+  const urls = useContentUrls(cover ? [cover] : EMPTY);
+  const fallback = useMemo(() => {
     const withThumb = (attachmentsByTask[task.id] || EMPTY).find((a) => a.thumbnail);
     if (withThumb) return withThumb.thumbnail;
     const brand = brandsById[task.brandId];
     return makeThumb((BRAND_COLORS[brand?.color] || BRAND_COLORS.orange).hex, task.format, task.title.length);
   }, [task.id, task.brandId, task.format, task.title, attachmentsByTask, brandsById]);
+  return (cover && urls[cover.id]) || fallback;
 }
 
 /* ───────────────────────── Rol değiştirici (geliştirme) ───────────────────────── */
@@ -4131,6 +4191,7 @@ function ApprovalsPage({ search, brandId }) {
                     <button type="button" onClick={() => openTask(t.id)} className="text-left cw-13 font-semibold text-slate-900 hover:text-orange-700">{t.title}</button>
                     <p className="cw-11 text-slate-500 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span>{brand?.name}</span><span>·</span><PlatformChip platform={t.platform} /><span>·</span><span>Yayın: {fmtDate(t.publishDate)}</span><span>·</span><span>Güncelleme: {fmtDateTime(t.updatedAt || t.createdAt)}</span>
+                      {latestVersion(state.contentVersions || EMPTY, t.id) && <><span>·</span><span data-approval-version="">Sürüm {latestVersion(state.contentVersions || EMPTY, t.id).versionNo} · {assetsOf(state.contentAssets || EMPTY, latestVersion(state.contentVersions || EMPTY, t.id).id).length} dosya</span></>}
                     </p>
                     {rev && <p className="mt-1.5 cw-12 text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-2.5 py-1.5"><strong className="font-semibold">{USER_BY_ID[rev.userId]?.name}:</strong> {rev.note}</p>}
                   </div>
@@ -4345,6 +4406,7 @@ function BrandEditModal({ brand, onClose }) {
           </div>
         </div>
       </form>
+      <BrandPortalLink brandId={brand.id} />
     </Modal>
   );
 }
@@ -4715,7 +4777,7 @@ function ClientContentPage({ search, brandId, pendingOnly }) {
   );
 }
 
-function RevisionModal({ task, onClose, onSubmitted }) {
+function RevisionModal({ task, target, onClose, onSubmitted }) {
   const { dispatch, notify } = useWS();
   const [note, setNote] = useState("");
   const [link, setLink] = useState("");
@@ -4723,17 +4785,18 @@ function RevisionModal({ task, onClose, onSubmitted }) {
   const submit = (e) => {
     e.preventDefault();
     const next = {};
-    if (note.trim().length < 5) next.note = "Lütfen revize talebinizi birkaç kelimeyle açıklayın.";
+    const noteError = validateRevisionNote(note);
+    if (noteError) next.note = noteError;
     if (link.trim() && !/^https:\/\/\S+$/i.test(link.trim())) next.link = "Bağlantı https:// ile başlamalıdır.";
     setErrors(next);
     if (Object.keys(next).length) return;
-    if (dispatch({ type: "REVIEW_CONTENT", taskId: task.id, decision: "revision", note, link })) {
+    if (dispatch({ type: "REVIEW_CONTENT", taskId: task.id, decision: "revision", note, link, requestId: target?.request.id, versionId: target?.version?.id })) {
       notify("Revize talebiniz ajansa iletildi.");
       onSubmitted();
     }
   };
   return (
-    <Modal title="Revize Talebi Yaz" subtitle={task.title} onClose={onClose} width={520}
+    <Modal title="Revize Talebi Yaz" subtitle={`${task.title}${target?.version ? ` · Sürüm ${target.version.versionNo}` : ""}`} onClose={onClose} width={520}
       footer={<><Btn variant="secondary" onClick={onClose}>İptal</Btn><Btn variant="primary" type="submit" form="cw-revision"><Send size={14} />Revize Talebini Gönder</Btn></>}>
       <form id="cw-revision" onSubmit={submit} noValidate className="space-y-3.5">
         <Field label="Revize Talebiniz" error={errors.note}>
@@ -4749,22 +4812,30 @@ function RevisionModal({ task, onClose, onSubmitted }) {
 }
 
 function ContentDetailModal({ taskId, onClose }) {
-  const { state, brandsById, attachmentsByTask, dispatch, notify, openPreview, can: allowed } = useWS();
+  const { state, brandsById, attachmentsByTask, dispatch, notify, openPreview, can: allowed, contentApi } = useWS();
   const [revising, setRevising] = useState(false);
+  const [sel, setSel] = useState(0);
   const task = state.tasks.find((t) => t.id === taskId);
   const thumb = useContentThumb(task || { id: "", brandId: "", format: "", title: "" });
+  // Müşterinin gördüğü sürüm: bekleyen isteğin sürümü; yoksa son gönderilen sürüm. Karar her zaman bekleyen isteğe verilir.
+  const target = task && contentApi ? reviewTarget(state, task.id) : null;
+  const requests = task && contentApi ? requestsOf(state.approvalRequests || EMPTY, task.id) : EMPTY;
+  const shown = target?.version || (requests.length ? (state.contentVersions || EMPTY).find((v) => v.id === requests.at(-1).versionId) : null) || null;
+  const media = shown ? assetsOf(state.contentAssets || EMPTY, shown.id) : EMPTY;
+  const urls = useContentUrls(media);
   if (!task) return null;
   const brand = brandsById[task.brandId];
   const files = attachmentsByTask[task.id] || EMPTY;
   const history = state.approvals.filter((a) => a.taskId === task.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const revInfo = revisionInfo(task, state.approvals);
-  const pending = task.status === "Müşteri Onayı";
+  const pending = task.status === "Müşteri Onayı" && (!contentApi || !!target);
   const approve = () => {
-    if (dispatch({ type: "REVIEW_CONTENT", taskId: task.id, decision: "approved" })) { notify("İçerik onaylandı. Ajansınız bilgilendirildi."); onClose(); }
+    if (dispatch({ type: "REVIEW_CONTENT", taskId: task.id, decision: "approved", requestId: target?.request.id, versionId: target?.version?.id })) { notify("İçerik onaylandı. Ajansınız bilgilendirildi."); onClose(); }
   };
-  if (revising) return <RevisionModal task={task} onClose={() => setRevising(false)} onSubmitted={onClose} />;
+  if (revising) return <RevisionModal task={task} target={target} onClose={() => setRevising(false)} onSubmitted={onClose} />;
+  const current = media[Math.min(sel, media.length - 1)];
   return (
-    <Modal title={task.title} subtitle={`${brand?.name || ""} · ${task.platform} · ${task.format}`} onClose={onClose} width={900}
+    <Modal title={task.title} subtitle={`${brand?.name || ""} · ${task.platform} · ${task.format}${shown ? ` · Sürüm ${shown.versionNo}` : ""}`} onClose={onClose} width={900}
       footer={pending && (allowed("canApproveContent") || allowed("canRequestRevision")) ? (
         <>
           <span className="mr-auto self-center cw-12 text-slate-500">Bu içerik onayınızı bekliyor.</span>
@@ -4774,10 +4845,24 @@ function ContentDetailModal({ taskId, onClose }) {
       ) : <><span className="mr-auto self-center cw-12 text-slate-500">{{ "Onaylandı": "Bu içeriği onayladınız; yayın planına alındı.", "Revizyon": "Revize talebiniz ajans tarafından hazırlanıyor.", "Tamamlandı": "Bu içerik yayınlandı." }[task.status] || ""}</span><Btn variant="secondary" onClick={onClose}>Kapat</Btn></>}>
       <div className="grid gap-5 md:grid-cols-5">
         <div className="md:col-span-3 space-y-3">
-          <div className="rounded-xl border border-slate-200 bg-slate-50 overflow-hidden"><img src={thumb} alt={task.title} className="w-full object-cover" style={{ aspectRatio: "16 / 10" }} /></div>
+          {current ? (
+            <div className="space-y-2" data-review-media={shown.id}>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 overflow-hidden"><ContentMedia asset={current} url={urls[current.id]} large /></div>
+              {media.length > 1 && (
+                <div className="flex gap-2 overflow-x-auto cw-scroll pb-1" role="tablist" aria-label="Sürüm dosyaları">
+                  {media.map((a, i) => (
+                    <button key={a.id} type="button" role="tab" aria-selected={i === sel} onClick={() => setSel(i)} aria-label={a.fileName}
+                      className={`shrink-0 h-14 w-20 rounded-lg overflow-hidden border-2 ${i === sel ? "border-orange-500" : "border-transparent hover:border-slate-300"}`}>
+                      <ContentMedia asset={a} url={urls[a.id]} thumb />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : <div className="rounded-xl border border-slate-200 bg-slate-50 overflow-hidden"><img src={thumb} alt={task.title} className="w-full object-cover" style={{ aspectRatio: "16 / 10" }} /></div>}
           <section>
             <SectionTitle icon={FileText}>Metin</SectionTitle>
-            <HtmlView html={task.description} empty="Bu içerik için metin eklenmemiş." />
+            {shown?.caption ? <p className="cw-13 text-slate-700 whitespace-pre-wrap break-words" data-review-caption="">{shown.caption}</p> : <HtmlView html={task.description} empty="Bu içerik için metin eklenmemiş." />}
           </section>
         </div>
         <div className="md:col-span-2 space-y-4">
@@ -4801,6 +4886,24 @@ function ContentDetailModal({ taskId, onClose }) {
               </div>
             ) : <p className="cw-12 text-slate-400">Dosya eklenmemiş.</p>}
           </section>
+          {requests.length > 0 ? (
+            <section data-review-history="">
+              <SectionTitle icon={History}>Sürüm ve Onay Geçmişi</SectionTitle>
+              <ol className="space-y-2">
+                {[...requests].reverse().map((r) => {
+                  const v = (state.contentVersions || EMPTY).find((x) => x.id === r.versionId);
+                  const d = state.approvals.find((a) => a.requestId === r.id);
+                  const tone = r.status === "approved" ? "border-teal-200 bg-teal-50 text-teal-900" : r.status === "revision_requested" ? "border-orange-200 bg-orange-50 text-orange-900" : r.status === "pending" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-slate-200 bg-slate-50 text-slate-600";
+                  return (
+                    <li key={r.id} className={`rounded-lg border px-2.5 py-2 cw-12 ${tone}`}>
+                      <p className="font-semibold flex flex-wrap items-center gap-1.5">Sürüm {v?.versionNo || "?"} · {REQUEST_STATUS[r.status]}<span className="font-normal opacity-75">· {fmtDateTime(r.closedAt || r.requestedAt)}</span></p>
+                      {d && <p className="mt-0.5 opacity-80">{USER_BY_ID[d.userId]?.name || "Müşteri"}{d.note ? `: ${d.note}` : ""}</p>}
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
+          ) : (
           <section>
             <SectionTitle icon={RotateCcw}>Geri Bildirim Geçmişi</SectionTitle>
             {history.length ? (
@@ -4815,9 +4918,46 @@ function ContentDetailModal({ taskId, onClose }) {
               </ol>
             ) : <p className="cw-12 text-slate-400">Henüz geri bildirim yok.</p>}
           </section>
+          )}
         </div>
       </div>
     </Modal>
+  );
+}
+
+/* Müşteri: onay geçmişi (karar verilmiş istekler, sürüm numarasıyla). */
+function ClientHistoryPage({ search, brandId }) {
+  const { state, openContent, brandsById } = useWS();
+  const q = norm(search);
+  const byId = Object.fromEntries(state.tasks.map((t) => [t.id, t]));
+  const rows = (state.approvalRequests || EMPTY)
+    .filter((r) => (r.status === "approved" || r.status === "revision_requested") && byId[r.taskId] && (brandId === "all" || byId[r.taskId].brandId === brandId)
+      && matchesSearch(q, byId[r.taskId].title, byId[r.taskId].format))
+    .sort((a, b) => String(b.closedAt).localeCompare(String(a.closedAt)));
+  return (
+    <div className="space-y-4">
+      <PageHeader title="Onay Geçmişi" description="Onayladığınız ve revize istediğiniz içerikler, incelediğiniz sürümle birlikte." />
+      {rows.length ? (
+        <ol className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100" data-client-history="">
+          {rows.map((r) => {
+            const t = byId[r.taskId];
+            const v = (state.contentVersions || EMPTY).find((x) => x.id === r.versionId);
+            const d = state.approvals.find((a) => a.requestId === r.id);
+            return (
+              <li key={r.id} className="p-3.5 flex flex-wrap items-center gap-3">
+                <BrandLogo brand={brandsById[t.brandId]} size={28} />
+                <div className="flex-1 min-w-[12rem]">
+                  <button type="button" onClick={() => openContent(t.id)} className="text-left cw-13 font-semibold text-slate-900 hover:text-orange-700">{t.title}</button>
+                  <p className="cw-11 text-slate-500">{t.format} · Sürüm {v?.versionNo || "?"} · {fmtDateTime(r.closedAt)}</p>
+                  {d?.note && <p className="cw-12 text-slate-600 mt-0.5 cw-clamp2">“{d.note}”</p>}
+                </div>
+                <span className={`inline-flex items-center h-6 px-2 rounded-md border cw-11 font-semibold ${r.status === "approved" ? "text-teal-700 bg-teal-50 border-teal-200" : "text-orange-700 bg-orange-50 border-orange-200"}`}>{REQUEST_STATUS[r.status]}</span>
+              </li>
+            );
+          })}
+        </ol>
+      ) : <EmptyBlock icon={History} title="Henüz karar verilmiş içerik yok" text="Onayladığınız veya revize istediğiniz içerikler burada listelenir." />}
+    </div>
   );
 }
 
@@ -4844,12 +4984,249 @@ function ClientFeedbackSection({ task, sectionRef }) {
       <ol className="space-y-2">
         {history.map((a) => (
           <li key={a.id} className={`rounded-lg border px-3 py-2 cw-12 ${a.decision === "approved" ? "border-teal-200 bg-teal-50 text-teal-900" : "border-orange-200 bg-orange-50 text-orange-900"}`}>
-            <p className="font-semibold flex items-center gap-1.5 flex-wrap"><Avatar userId={a.userId} size={18} />{USER_BY_ID[a.userId]?.name || "Müşteri"} · {a.decision === "approved" ? "onayladı" : "revize istedi"}<span className="font-normal opacity-70">· {fmtDateTime(a.createdAt)}</span>{revisionStateOf(a, info) && <span className="ml-auto"><RevisionBadge state={revisionStateOf(a, info)} /></span>}</p>
+            <p className="font-semibold flex items-center gap-1.5 flex-wrap"><Avatar userId={a.userId} size={18} />{USER_BY_ID[a.userId]?.name || "Müşteri"} · {a.decision === "approved" ? "onayladı" : "revize istedi"}{a.versionId && <span className="font-normal">· Sürüm {(state.contentVersions || EMPTY).find((v) => v.id === a.versionId)?.versionNo || "?"}</span>}<span className="font-normal opacity-70">· {fmtDateTime(a.createdAt)}</span>{revisionStateOf(a, info) && <span className="ml-auto"><RevisionBadge state={revisionStateOf(a, info)} /></span>}</p>
             {a.note && <p className="mt-1 whitespace-pre-wrap">{a.note}</p>}
             {a.link && <a href={a.link} target="_blank" rel="noopener noreferrer" className="mt-1 inline-flex items-center gap-1 underline"><LinkIcon size={11} />Ek bağlantı</a>}
           </li>
         ))}
       </ol>
+    </section>
+  );
+}
+
+/* ───────────────────────── İçerik sürümleri ve müşteri onay bağlantısı ───────────────────────── */
+
+/* Süreli (imzalı) önizleme adresleri; kısa süre önbellekte tutulur (aynı dosya için tekrar istek atılmaz). */
+const contentUrlCache = new Map();
+function useContentUrls(assets) {
+  const { contentApi } = useWS();
+  const key = assets.map((a) => a.id).join(",");
+  const [urls, setUrls] = useState({});
+  useEffect(() => {
+    if (!contentApi || !assets.length) { setUrls({}); return undefined; }
+    const fresh = {}, need = [];
+    assets.forEach((a) => { const c = contentUrlCache.get(a.id); if (c && Date.now() - c.at < 8 * 60 * 1000) fresh[a.id] = c.url; else need.push(a); });
+    setUrls(fresh);
+    if (!need.length) return undefined;
+    let alive = true;
+    contentApi.urls(need).then((m) => {
+      Object.entries(m).forEach(([id, url]) => contentUrlCache.set(id, { url, at: Date.now() }));
+      if (alive) setUrls((u) => ({ ...u, ...m }));
+    }, () => { /* önizleme yoksa yer tutucu gösterilir */ });
+    return () => { alive = false; };
+  }, [contentApi, key]); // eslint-disable-line react-hooks/exhaustive-deps
+  return urls;
+}
+
+/* Dosya önizlemesi: görsel / video / PDF; adres yoksa veya dosya açılamazsa arayüz bozulmaz. */
+function ContentMedia({ asset, url, large, thumb }) {
+  const [broken, setBroken] = useState(false);
+  const kind = asset.mimeType.startsWith("image/") ? "image" : asset.mimeType.startsWith("video/") ? "video" : "pdf";
+  const box = large ? "w-full" : "w-full h-full";
+  const style = large ? { aspectRatio: "16 / 10" } : undefined;
+  if (!url || broken) {
+    return (
+      <div className={`${box} flex flex-col items-center justify-center gap-1 bg-slate-100 text-slate-400`} style={style} data-media-fallback="">
+        {kind === "video" ? <Film size={large ? 28 : 16} /> : kind === "pdf" ? <FileText size={large ? 28 : 16} /> : <FileImage size={large ? 28 : 16} />}
+        {large && <span className="cw-12">{url === undefined && !broken ? "Önizleme yükleniyor…" : "Önizleme açılamadı."}</span>}
+      </div>
+    );
+  }
+  if (kind === "image") return <img src={url} alt={asset.fileName} loading="lazy" onError={() => setBroken(true)} className={`${box} object-${large ? "contain bg-slate-900/5" : "cover"}`} style={style} />;
+  if (kind === "video") {
+    return thumb
+      ? <div className={`${box} flex items-center justify-center bg-slate-800 text-white`}><Film size={16} /></div>
+      : <video src={url} controls={large} preload="metadata" onError={() => setBroken(true)} className={`${box} bg-black`} style={style} />;
+  }
+  return (
+    <div className={`${box} flex flex-col items-center justify-center gap-2 bg-slate-50 text-slate-500`} style={style}>
+      <FileText size={large ? 32 : 16} />
+      {large && <a href={url} target="_blank" rel="noopener noreferrer" className="cw-12 font-semibold text-orange-700 hover:underline">PDF'i yeni sekmede aç</a>}
+    </div>
+  );
+}
+
+const VERSION_TONES = {
+  draft: "text-slate-600 bg-slate-100 border-slate-200", sent: "text-amber-700 bg-amber-50 border-amber-200", pending: "text-amber-700 bg-amber-50 border-amber-200",
+  approved: "text-teal-700 bg-teal-50 border-teal-200", revision_requested: "text-orange-700 bg-orange-50 border-orange-200",
+  withdrawn: "text-slate-500 bg-slate-50 border-slate-200", superseded: "text-slate-500 bg-slate-50 border-slate-200",
+};
+
+/* Görev detayı (ekip): içerik sürümleri. Taslak sürüme dosya yüklenir ve metni yazılır; müşteriye gönderilince kilitlenir. */
+function ContentVersionsSection({ task }) {
+  const { state, actor, contentApi, dispatch, notify, previewOnly } = useWS();
+  const [busy, setBusy] = useState(false);
+  const [uploads, setUploads] = useState([]);
+  const [openOld, setOpenOld] = useState(false);
+  const fileRef = useRef(null);
+  const versions = useMemo(() => (contentApi ? versionsOf(state.contentVersions || EMPTY, task.id).reverse() : EMPTY), [contentApi, state.contentVersions, task.id]);
+  const allAssets = useMemo(() => (state.contentAssets || EMPTY).filter((a) => a.taskId === task.id), [state.contentAssets, task.id]);
+  const urls = useContentUrls(allAssets);
+  if (!contentApi) return null;
+  const canEdit = !previewOnly && canEditContentVersion(actor, task, state);
+  const latest = versions[0] || null;
+  const draft = latest && !latest.lockedAt ? latest : null;
+
+  const createVersion = async () => {
+    setBusy(true);
+    try { const res = await contentApi.createVersion(task, state, actor.id); if (res) dispatch({ type: "REMOTE_MERGE", remote: true, ...res }); }
+    catch (err) { notify(err?.message || "Sürüm oluşturulamadı.", "error"); }
+    finally { setBusy(false); }
+  };
+  const upload = async (files) => {
+    if (!draft) return;
+    for (const file of files) {
+      const key = uid();
+      const check = validateContentFile(file);
+      if (!check.ok) { setUploads((u) => [...u, { key, name: file.name, error: check.error }]); continue; }
+      setUploads((u) => [...u, { key, name: file.name, progress: 0 }]);
+      try {
+        const asset = await contentApi.upload(task, draft, file, { userId: actor.id, onProgress: (p) => setUploads((u) => u.map((x) => (x.key === key ? { ...x, progress: p } : x))) });
+        dispatch({ type: "REMOTE_MERGE", remote: true, contentAssets: [asset] });
+        setUploads((u) => u.filter((x) => x.key !== key));
+      } catch (err) {
+        setUploads((u) => u.map((x) => (x.key === key ? { ...x, error: err?.message || "Yükleme başarısız." } : x)));
+      }
+    }
+  };
+  const removeAsset = async (asset, version) => {
+    try { await contentApi.removeAsset(asset, version); dispatch({ type: "REMOTE_DELETE", remote: true, collection: "contentAssets", id: asset.id }); notify("Dosya kaldırıldı."); }
+    catch (err) { notify(err?.message || "Dosya kaldırılamadı.", "error"); throw err; }
+  };
+
+  const shownVersions = openOld ? versions : versions.slice(0, 2);
+  return (
+    <section data-content-versions={task.id}>
+      <SectionTitle icon={Layers} right={canEdit && !draft && (
+        <Btn size="sm" variant="secondary" onClick={createVersion} disabled={busy}><Plus size={13} />{latest ? `Sürüm ${latest.versionNo + 1} Oluştur` : "Sürüm Oluştur"}</Btn>
+      )}>İçerik Sürümleri</SectionTitle>
+      {!versions.length ? (
+        <p className="cw-12 text-slate-500 rounded-lg border border-dashed border-slate-300 px-3 py-3">
+          Henüz sürüm yok. {canEdit ? "Müşteriye gönderilecek görsel, video veya PDF'leri yüklemek için bir sürüm oluşturun." : "Sorumlu ekip üyesi dosyaları yüklediğinde burada görünür."}
+        </p>
+      ) : (
+        <div className="space-y-2.5">
+          {shownVersions.map((v) => {
+            const st = versionStatus(v, state.approvalRequests || EMPTY);
+            const files = assetsOf(state.contentAssets || EMPTY, v.id);
+            const decisions = state.approvals.filter((a) => a.versionId === v.id);
+            const editable = canEdit && !v.lockedAt;
+            return (
+              <article key={v.id} data-version={v.versionNo} className={`rounded-xl border p-3 space-y-2.5 ${v.lockedAt ? "border-slate-200 bg-white" : "border-orange-200 bg-orange-50/30"}`}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="cw-13 font-bold text-slate-900">Sürüm {v.versionNo}</span>
+                  <span className={`inline-flex items-center h-5 px-1.5 rounded-md border cw-10 font-semibold ${VERSION_TONES[st]}`} data-version-status={st}>{VERSION_STATUS[st]}</span>
+                  <span className="cw-11 text-slate-400 ml-auto">{v.lockedAt ? <span className="inline-flex items-center gap-1"><Lock size={10} />Gönderildi · {fmtDateTime(v.lockedAt)}</span> : `Oluşturuldu · ${fmtDateTime(v.createdAt)}`}</span>
+                </div>
+                {editable
+                  ? <VersionCaption version={v} />
+                  : v.caption ? <p className="cw-12 text-slate-700 whitespace-pre-wrap break-words">{v.caption}</p> : <p className="cw-12 text-slate-400">Paylaşım metni yok.</p>}
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                  {files.map((a) => (
+                    <figure key={a.id} className="relative group/asset rounded-lg border border-slate-200 overflow-hidden bg-white" data-content-asset={a.id}>
+                      <div className="h-20"><ContentMedia asset={a} url={urls[a.id]} thumb /></div>
+                      <figcaption className="px-1.5 py-1 cw-10 text-slate-500 truncate" title={a.fileName}>{a.fileName} · {formatBytes(a.fileSize)}</figcaption>
+                      <span className="absolute top-1 right-1 flex gap-0.5 sm:opacity-0 sm:group-hover/asset:opacity-100 focus-within:opacity-100">
+                        {urls[a.id] && <a href={urls[a.id]} target="_blank" rel="noopener noreferrer" className="h-7 w-7 inline-flex items-center justify-center rounded-md bg-white/90 text-slate-600 hover:text-orange-700 shadow-sm" aria-label={`${a.fileName} dosyasını aç`}><ExternalLink size={12} /></a>}
+                        {editable && <span className="bg-white/90 rounded-md shadow-sm"><DeleteAction label={`${a.fileName} dosyasını kaldır`} onConfirm={() => removeAsset(a, v)} /></span>}
+                      </span>
+                    </figure>
+                  ))}
+                  {editable && (
+                    <button type="button" onClick={() => fileRef.current?.click()} className="h-[6.25rem] rounded-lg border-2 border-dashed border-slate-300 text-slate-500 hover:border-orange-400 hover:text-orange-700 flex flex-col items-center justify-center gap-1 cw-11 font-semibold">
+                      <Upload size={16} />Dosya Ekle<span className="font-normal text-slate-400">≤ 50 MB</span>
+                    </button>
+                  )}
+                </div>
+                {editable && uploads.length > 0 && (
+                  <ul className="space-y-1" aria-live="polite">
+                    {uploads.map((u) => (
+                      <li key={u.key} className={`flex items-center gap-2 cw-11 ${u.error ? "text-red-700" : "text-slate-600"}`}>
+                        <span className="truncate flex-1 min-w-0">{u.name}</span>
+                        {u.error ? <><span className="truncate max-w-[60%]">{u.error}</span><button type="button" onClick={() => setUploads((x) => x.filter((y) => y.key !== u.key))} className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded hover:bg-red-50" aria-label="Uyarıyı kapat"><X size={12} /></button></>
+                          : <span className="w-24 h-1.5 rounded-full bg-slate-100 overflow-hidden" role="progressbar" aria-label={`${u.name} yükleniyor`} aria-valuenow={Math.round((u.progress || 0) * 100)} aria-valuemin={0} aria-valuemax={100}><span className="block h-full bg-orange-500" style={{ width: `${Math.round((u.progress || 0) * 100)}%` }} /></span>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {decisions.map((d) => (
+                  <p key={d.id} className={`rounded-lg border px-2.5 py-1.5 cw-12 ${d.decision === "approved" ? "border-teal-200 bg-teal-50 text-teal-900" : "border-orange-200 bg-orange-50 text-orange-900"}`}>
+                    <strong className="font-semibold">{USER_BY_ID[d.userId]?.name || "Müşteri"}</strong> {d.decision === "approved" ? "onayladı" : "revize istedi"} · {fmtDateTime(d.createdAt)}{d.note ? `: ${d.note}` : ""}
+                  </p>
+                ))}
+              </article>
+            );
+          })}
+          {versions.length > 2 && <Btn size="sm" variant="ghost" onClick={() => setOpenOld((o) => !o)}>{openOld ? "Eski sürümleri gizle" : `${versions.length - 2} eski sürümü göster`}</Btn>}
+        </div>
+      )}
+      <input ref={fileRef} type="file" multiple accept={CONTENT_ACCEPT} className="hidden" aria-hidden="true" tabIndex={-1}
+        onChange={(e) => { const list = [...e.target.files]; e.target.value = ""; upload(list); }} data-content-file-input="" />
+    </section>
+  );
+}
+
+function VersionCaption({ version }) {
+  const { dispatch } = useWS();
+  const [v, setV] = useState(version.caption);
+  useEffect(() => { setV(version.caption); }, [version.id, version.caption]);
+  const commit = () => { if (v !== version.caption && dispatch({ type: "UPDATE_VERSION", id: version.id, patch: { caption: v } })) { /* kaydedildi */ } };
+  return (
+    <textarea value={v} onChange={(e) => setV(e.target.value)} onBlur={commit} rows={3} maxLength={5000} aria-label={`Sürüm ${version.versionNo} paylaşım metni`}
+      placeholder="Paylaşım metni (müşteri bu metni onaylar)…"
+      className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 cw-13 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100 resize-y" />
+  );
+}
+
+/* Marka düzenleme: Müşteri Onay Bağlantısı. Bağlantı yalnızca yönlendirir; erişim marka üyeliğiyle verilir ve iptal edilir. */
+function BrandPortalLink({ brandId }) {
+  const { state, dispatch, notify, copyLink } = useWS();
+  const [ask, setAsk] = useState(null);
+  const brand = state.allBrands.find((b) => b.id === brandId);
+  if (!brand) return null;
+  if (!brand.slug) return <p className="mt-4 cw-12 text-slate-500">Müşteri onay bağlantısı için supabase/007_content_approvals.sql çalıştırılmalı.</p>;
+  const url = `${window.location.origin}${portalPath(brand.slug)}`;
+  const clients = state.allMemberships.filter((m) => m.brandId === brand.id && state.allUsers.find((u) => u.id === m.userId)?.role === "client").map((m) => state.allUsers.find((u) => u.id === m.userId));
+  const setClients = (ids) => dispatch({ type: "SET_BRAND_MEMBERS", brandId: brand.id, role: "client", userIds: ids });
+  return (
+    <section className="mt-5 pt-4 border-t border-slate-100 space-y-2.5" data-portal-link={brand.slug} aria-labelledby={`portal-${brand.id}`}>
+      <h3 id={`portal-${brand.id}`} className="cw-13 font-bold text-slate-900 flex items-center gap-1.5"><LinkIcon size={14} className="text-slate-400" />Müşteri Onay Bağlantısı</h3>
+      <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 h-9 min-w-0">
+        <span className="flex-1 min-w-0 truncate font-mono cw-12 text-slate-700" title={url}>{url}</span>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        <Btn size="sm" variant="secondary" onClick={() => copyLink(url)}><Copy size={13} />Bağlantıyı Kopyala</Btn>
+        <Btn size="sm" variant="secondary" onClick={() => window.open(url, "_blank", "noopener,noreferrer")}><ExternalLink size={13} />Onay Sayfasını Aç</Btn>
+        <Btn size="sm" variant="secondary" onClick={() => setAsk("rotate")}><RefreshCw size={13} />Bağlantıyı Yenile</Btn>
+        <Btn size="sm" variant="ghost" className="text-red-600 hover:bg-red-50" onClick={() => setAsk("revoke")} disabled={!clients.length}><Lock size={13} />Erişimi İptal Et</Btn>
+      </div>
+      {ask && (
+        <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 space-y-2 cw-12 text-amber-900">
+          <p>{ask === "rotate" ? "Yeni bir adres oluşturulur; eski bağlantı artık hiçbir markaya açılmaz. Müşterilere yeni bağlantıyı göndermeniz gerekir." : `Bu markaya bağlı ${clients.length} müşteri hesabının erişimi kaldırılır. Hesaplar silinmez; tekrar erişim için Kullanıcılar ekranından marka atanır.`}</p>
+          <div className="flex justify-end gap-2">
+            <Btn size="sm" variant="ghost" onClick={() => setAsk(null)}>Vazgeç</Btn>
+            <Btn size="sm" variant="danger" onClick={() => {
+              const ok = ask === "rotate" ? dispatch({ type: "UPDATE_BRAND", id: brand.id, patch: { slug: rotatedSlug(brand.name) } }) : setClients([]);
+              if (ok) notify(ask === "rotate" ? "Bağlantı yenilendi. Eski bağlantı artık çalışmaz." : "Müşteri erişimi iptal edildi.");
+              setAsk(null);
+            }}>{ask === "rotate" ? "Bağlantıyı Yenile" : "Erişimi İptal Et"}</Btn>
+          </div>
+        </div>
+      )}
+      <div>
+        <p className="cw-11 font-semibold text-slate-600 mb-1">Erişimi olan müşteri hesapları</p>
+        {clients.length ? (
+          <ul className="space-y-1">
+            {clients.map((u) => (
+              <li key={u.id} className="flex items-center gap-2 cw-12 text-slate-700">
+                <Avatar userId={u.id} size={20} /><span className="flex-1 min-w-0 truncate">{u.name}<span className="text-slate-400"> · {u.email}</span></span>
+                <Btn size="sm" variant="ghost" className="h-7 text-red-600 hover:bg-red-50" onClick={() => { if (setClients(clients.filter((c) => c.id !== u.id).map((c) => c.id))) notify(`${u.name} için erişim kaldırıldı.`); }}>Kaldır</Btn>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="cw-12 text-slate-400">Bu markaya bağlı müşteri hesabı yok. Bağlantı tek başına erişim vermez.</p>}
+        <p className="mt-1.5 cw-11 text-slate-500">Bağlantı yalnızca yönlendirir: müşteri e-posta bağlantısıyla giriş yapar ve yalnızca bu markaya tanımlıysa onay sayfasını görür.</p>
+      </div>
     </section>
   );
 }
@@ -6309,6 +6686,7 @@ const NAV_BY_ROLE = {
     { key: "client-home", label: "Genel Bakış", Icon: LayoutDashboard },
     { key: "content", label: "İçeriklerim", Icon: LayoutGrid, perm: "canViewContent" },
     { key: "pending", label: "Onay Bekleyen İçerikler", Icon: Clock, perm: "canAccessApprovals" },
+    { key: "client-history", label: "Onay Geçmişi", Icon: History, perm: "canAccessApprovals" },
     { key: "client-kit", label: "Marka Kılavuzu", Icon: BookOpen, perm: "canViewBrandFiles" },
     { key: "client-files", label: "Marka Dosyaları", Icon: FolderOpen, perm: "canViewBrandFiles" },
     { key: "notifications", label: "Bildirimler", Icon: Bell },
@@ -6318,14 +6696,14 @@ const OPS_KEYS = new Set(["overview", "today", "plan", "kit", "files", "filters"
 const DEFAULT_PAGE = { admin: "ops", employee: "my", client: "client-home" };
 const PAGE_TITLES = {
   my: "Bugünkü İşlerim", approvals: "Onay Süreçleri", team: "Ekip & Marka Yönetimi", users: "Kullanıcılar & Yetkiler",
-  notifications: "Bildirimler", "client-home": "Genel Bakış", content: "İçeriklerim", pending: "Onay Bekleyen İçerikler", "client-files": "Marka Dosyaları", "client-kit": "Marka Kılavuzu",
+  notifications: "Bildirimler", "client-home": "Genel Bakış", content: "İçeriklerim", pending: "Onay Bekleyen İçerikler", "client-files": "Marka Dosyaları", "client-kit": "Marka Kılavuzu", "client-history": "Onay Geçmişi",
 };
 const SEARCH_PLACEHOLDERS = {
   ops: "Görev, marka veya kişi ara…", my: "İşlerimde ara…", approvals: "Onay sürecindeki içeriklerde ara…", team: "Marka, çalışan veya müşteri ara…",
-  users: "Kullanıcı veya e-posta ara…", notifications: "Bildirimlerde ara…", "client-home": "İçeriklerimde ara…", content: "İçeriklerimde ara…", pending: "Onay bekleyenlerde ara…", "client-files": "Görev, marka veya kişi ara…", "client-kit": "İçeriklerimde ara…",
+  users: "Kullanıcı veya e-posta ara…", notifications: "Bildirimlerde ara…", "client-home": "İçeriklerimde ara…", content: "İçeriklerimde ara…", pending: "Onay bekleyenlerde ara…", "client-files": "Görev, marka veya kişi ara…", "client-kit": "İçeriklerimde ara…", "client-history": "Onay geçmişinde ara…",
 };
 
-function Workspace({ state, dispatch, getState, createTasks, draftScope, actorId, realUserId, onViewAs, allowImpersonation, onSignOut, syncError, denied, media, brandKit, checklistApi }) {
+function Workspace({ state, dispatch, getState, createTasks, draftScope, contentApi, portalSlug, actorId, realUserId, onViewAs, allowImpersonation, onSignOut, syncError, denied, media, brandKit, checklistApi }) {
   const actor = state.users.find((u) => u.id === actorId) || state.users.find((u) => u.id === realUserId);
   const realUser = state.users.find((u) => u.id === realUserId);
   setDirectory(state.users, actor.id);
@@ -6482,9 +6860,22 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, actorId
     openNewTask: (brandId) => setNewTask({ brandId: brandId || (selectedBrandId !== "all" ? selectedBrandId : undefined) }),
     brandKitStore: brandKit,
     checklistApi: checklistsOn ? checklistApi : null, checklistIndex, ensureChecklist, submitTask,
+    contentApi: state.features?.approvals ? contentApi : null,
     // Gerçek oturumda başka kullanıcı olarak önizleme yapılırken kılavuz da salt okunurdur.
     previewOnly: actor.id !== realUserId && !allowImpersonation,
-  }), [ctxState, dispatch, brandsById, commentCount, attachmentsByTask, revisionByTask, notify, updateTask, openTask, copyLink, media, actor, role, allowed, statusOptions, selectedBrandId, brandKit, realUserId, allowImpersonation, checklistsOn, checklistApi, checklistIndex, ensureChecklist, submitTask]);
+  }), [ctxState, dispatch, brandsById, commentCount, attachmentsByTask, revisionByTask, notify, updateTask, openTask, copyLink, media, actor, role, allowed, statusOptions, selectedBrandId, brandKit, realUserId, allowImpersonation, checklistsOn, checklistApi, checklistIndex, ensureChecklist, submitTask, contentApi, state.features]);
+
+  /* Müşteri onay bağlantısı (/musteri/<adres>): adres yalnızca yönlendirir, yetki vermez. Markayı kullanıcı zaten
+     görebiliyorsa (RLS) o markanın onay ekranı açılır; aksi halde — marka var olsun ya da olmasın — aynı mesaj gösterilir. */
+  const [portal, setPortal] = useState(() => (portalSlug == null ? null : { slug: portalSlug, status: "pending" }));
+  useEffect(() => {
+    if (!portal || portal.status !== "pending") return;
+    const brand = portal.slug ? view.brands.find((b) => b.slug === portal.slug) : null;
+    if (!brand) { setPortal({ ...portal, status: "denied" }); return; }
+    setSelectedBrandId(brand.id);
+    setPageRaw(role === "client" ? "pending" : "approvals");
+    setPortal({ ...portal, status: "ok" });
+  }, [portal, view.brands, role]);
 
   const drawerTask = drawer ? view.tasks.find((t) => t.id === drawer.id) : null;
   const deleteTask = deleteId ? view.tasks.find((t) => t.id === deleteId) : null;
@@ -6583,6 +6974,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, actorId
   else if (currentPage === "client-home") pageNode = <ClientHome search={filters.search} brandId={selectedBrandId} onGo={setPage} onOpenNotification={openNotification} />;
   else if (currentPage === "content") pageNode = <ClientContentPage search={filters.search} brandId={selectedBrandId} />;
   else if (currentPage === "pending") pageNode = <ClientContentPage search={filters.search} brandId={selectedBrandId} pendingOnly />;
+  else if (currentPage === "client-history") pageNode = <ClientHistoryPage search={filters.search} brandId={selectedBrandId} />;
   else if (currentPage === "client-kit") {
     const kitBrandId = selectedBrand ? selectedBrand.id : view.brands.length === 1 ? view.brands[0].id : null;
     pageNode = kitBrandId ? <BrandKitView key={kitBrandId} brandId={kitBrandId} /> : <BrandKitPicker brands={view.brands} onPick={selectBrand} />;
@@ -6635,7 +7027,18 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, actorId
           <main ref={mainRef} className={`flex-1 min-h-0 ${bulkOpen ? "overflow-hidden" : "overflow-y-auto"} cw-scroll`}>
             {bulkOpen
               ? <BulkTaskSheet draftScope={draftScope} createTasks={createTasks} onClose={() => setBulkOpen(false)} />
-              : <div className="px-4 lg:px-6 py-5 space-y-5 max-w-screen-2xl mx-auto">{pageNode}</div>}
+              : (
+                <div className="px-4 lg:px-6 py-5 space-y-5 max-w-screen-2xl mx-auto">
+                  {portal?.status === "denied" && (
+                    <div role="alert" data-portal-denied="" className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 cw-13 text-amber-900">
+                      <Lock size={16} className="shrink-0 mt-0.5" />
+                      <span className="flex-1">Bu müşteri onay bağlantısına erişiminiz yok veya bağlantı yenilenmiş. Ajansınızdan güncel bağlantıyı isteyin.</span>
+                      <button type="button" onClick={() => setPortal(null)} className="shrink-0 h-7 w-7 inline-flex items-center justify-center rounded-md hover:bg-amber-100" aria-label="Uyarıyı kapat"><X size={14} /></button>
+                    </div>
+                  )}
+                  {pageNode}
+                </div>
+              )}
           </main>
         </div>
 
@@ -6695,7 +7098,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, actorId
 
 /* ───────────────────────── Veri kaynağı & oturum ───────────────────────── */
 
-const demoSource = createMemorySource(createDemoState, { checklist: createMemoryChecklist(DEMO_CHECKLIST_TEMPLATES) });
+const demoSource = createMemorySource(createDemoState, { checklist: createMemoryChecklist(DEMO_CHECKLIST_TEMPLATES), content: createMemoryContent() });
 demoSource.brandKit = createMemoryBrandKit(DEMO_BRAND_KITS);
 
 /* Reducer'ı yerel önbellek olarak çalıştırır (iyimser güncelleme) ve her işlemi kaynağa yazar.
@@ -6857,6 +7260,7 @@ function LoginScreen({ auth }) {
    <App source={createSupabaseSource(supabase)} />  — bkz. workspaceData.js */
 export default function App({ source = demoSource }) {
   const { phase, state, dispatch, getState, createTasks, syncError, denied, reload, realUserId, viewAsId, viewAs } = useWorkspaceStore(source);
+  const portalSlug = useMemo(() => (typeof window === "undefined" ? null : parsePortalPath(window.location.pathname)), []);
   const brandKit = useMemo(() => (source.brandKit ? createBrandKitStore(source.brandKit) : null), [source]);
   const signOut = source.auth ? () => { source.auth.signOut().catch(() => {}); } : null;
 
@@ -6886,7 +7290,7 @@ export default function App({ source = demoSource }) {
     <Workspace
       state={state} dispatch={dispatch} getState={getState} createTasks={createTasks} draftScope={source.draftScope || null} actorId={viewAsId} realUserId={realUserId} onViewAs={viewAs}
       allowImpersonation={!!source.allowImpersonation} onSignOut={signOut} syncError={syncError} denied={denied} media={source.media || null} brandKit={brandKit}
-      checklistApi={source.checklist || null}
+      checklistApi={source.checklist || null} contentApi={source.content || null} portalSlug={portalSlug}
     />
   );
 }

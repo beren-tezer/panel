@@ -77,14 +77,15 @@ export function createMemorySource(buildDemo, { checklist = null, content = null
       const demo = buildDemo(checklist);
       taskNo = 1000;
       demo.state.tasks.forEach((t) => { const n = Number(String(t.code || "").replace("CW-", "")); if (n > taskNo) taskNo = n; });
-      demo.state.features = { checklists: !!checklist };
+      demo.state.features = { checklists: !!checklist, approvals: !!content };
       return demo;
     },
     async persist(action, prev, next, { patchTask, merge, actorId }) {
       if (action.type === "ADD_TASK") patchTask(action.task.id, { code: taskCode(++taskNo) });
       if (action.type === "ADD_TASKS") action.tasks.forEach((t) => patchTask(t.id, { code: taskCode(++taskNo) }));
-      if (content) emulateApprovalServer(action, prev, next, merge, actorId);
+      // Önce doğrulama (kontrol listesi), sonra onay isteği: gönderim reddedilirse istek oluşmaz.
       if (checklist) emulateChecklistServer(checklist, action, prev, next, merge, actorId);
+      if (content) emulateApprovalServer(action, prev, next, merge, actorId);
     },
   };
 }

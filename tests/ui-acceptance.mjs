@@ -72,6 +72,8 @@ const HELPERS = `
   const rect = (el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, cx: r.x + r.width / 2, cy: r.y + r.height / 2 }; };
 `;
 const page = (body) => js(HELPERS + body);
+// Kartları açar ("Diğerlerini Göster"): tüm görev satırları görünür olur.
+const expandAll = () => page(`$$("[data-card-toggle][aria-expanded='false']").forEach((b) => b.click()); await new Promise((r) => setTimeout(r, 400)); return true;`);
 
 try {
   await waitFor(() => fetch(`http://localhost:${PORT}/`).then((r) => r.ok));
@@ -91,6 +93,28 @@ try {
   await viewport(1920, 1080);
   await send("Page.navigate", { url: `http://localhost:${PORT}/?demo` });
   await waitFor(() => page(`return $$("[data-brand-card]").length > 0;`));
+
+  /* ── 0. Kart kuralı: varsayılan 1 görev + "Diğerlerini Göster"; açılınca kart aşağı doğru açılır, içeride kayar ── */
+  const collapsed = await page(`const cs = $$("[data-brand-card]"); return {
+    maxRows: Math.max(...cs.map((c) => c.querySelectorAll("[data-task-row]").length)),
+    heights: [...new Set(cs.map((c) => Math.round(rect(c).h)))],
+    toggle: card("Sofra Pide").querySelector("[data-card-toggle]")?.textContent.trim(),
+    total: card("Sofra Pide").querySelector("p").textContent };`);
+  const spaTotal = Number((collapsed.total.match(/(\d+) görev/) || [])[1]);
+  check("Kartlarda varsayılan en fazla 1 görev; tüm kartlar aynı yükseklikte", collapsed.maxRows === 1 && collapsed.heights.length === 1, JSON.stringify(collapsed));
+  check("“Diğerlerini Göster (N)” kalan görev sayısını gösterir", collapsed.toggle === `Diğerlerini Göster (${spaTotal - 1})`, collapsed.toggle);
+  const cardOpen = await page(`const c = card("Sofra Pide"), other = card("Tepe Emlak"), h0 = rect(other).h;
+    c.querySelector("[data-card-toggle]").click(); await new Promise((r) => setTimeout(r, 400));
+    const list = c.querySelector("[data-card-tasks]");
+    return { rows: c.querySelectorAll("[data-task-row]").length, h: Math.round(rect(c).h), otherSame: Math.abs(rect(other).h - h0) < 1, scroll: list.scrollHeight > list.clientHeight,
+      label: c.querySelector("[data-card-toggle]").textContent.trim(), expanded: c.querySelector("[data-card-toggle]").getAttribute("aria-expanded") };`);
+  check("Açılınca tüm görevler kart içinde kayar; kart sınırlı (420px) açılır, komşu kartlar değişmez",
+    cardOpen.rows === spaTotal && cardOpen.h === 420 && cardOpen.otherSame && cardOpen.scroll && cardOpen.expanded === "true" && cardOpen.label === "Daha Az Göster", JSON.stringify(cardOpen));
+  const closed = await page(`const c = card("Sofra Pide"); c.querySelector("[data-card-toggle]").click(); await new Promise((r) => setTimeout(r, 400));
+    return { rows: c.querySelectorAll("[data-task-row]").length, h: Math.round(rect(c).h) };`);
+  check("“Daha Az Göster” kartı tekrar 1 göreve indirir", closed.rows === 1 && closed.h === collapsed.heights[0], JSON.stringify(closed));
+  // Aşağıdaki kontroller (eski davranış: kartın tüm görevleri) için kartlar açılır.
+  await expandAll();
 
   /* ── Kurulum: Atlas Ajans kartında 2, Sofra Pide kartında 25 görev ── */
   const before = await page(`return { cre: card("Atlas Ajans").querySelectorAll("[data-task-row]").length, spa: card("Sofra Pide").querySelectorAll("[data-task-row]").length };`);
@@ -112,6 +136,8 @@ try {
     await page(`byText("button", "Ekle", $("input[aria-label='Yeni görev adı']").closest("tr")).click();`);
   }
   await page(`byText("button", "Günlük Akış").click();`);
+  await waitFor(() => page(`return $$("[data-card-toggle]").length > 0;`));
+  await expandAll();
   await waitFor(() => page(`return card("Sofra Pide") && card("Sofra Pide").querySelectorAll("[data-task-row]").length === 25;`));
   const counts = await page(`return { cre: card("Atlas Ajans").querySelectorAll("[data-task-row]").length, spa: card("Sofra Pide").querySelectorAll("[data-task-row]").length };`);
   check("Kurulum: 2 ve 25 görevli kartlar", counts.cre === 2 && counts.spa === 25, JSON.stringify(counts));

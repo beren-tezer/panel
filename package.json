@@ -14,7 +14,8 @@
     "test:ui:bulk": "node --experimental-websocket tests/ui-bulk.mjs",
     "test:bulk:dev": "node --experimental-websocket tests/bulk-supabase.mjs",
     "test:ui:approvals": "node --experimental-websocket tests/ui-approvals.mjs",
-    "test:approvals:dev": "node --experimental-websocket tests/approvals-supabase.mjs"
+    "test:approvals:dev": "node --experimental-websocket tests/approvals-supabase.mjs",
+    "test:ui:employee": "node --experimental-websocket tests/ui-employee.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",

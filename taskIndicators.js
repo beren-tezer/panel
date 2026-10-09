@@ -114,3 +114,31 @@ export function revisionInfo(task, approvals) {
 }
 
 export const isPendingRevision = (info) => !!info && info.state !== "resolved";
+
+/* ───────────────────────── Çalışan ekranı kutuları ───────────────────────── */
+
+/* Ekrandaki sıra: üst satır 1–4, alt satır 5–8. Her görev tam olarak bir kutuda görünür. */
+export const EMPLOYEE_BOXES = [
+  { key: "late", title: "Geciken İşler" },
+  { key: "active", title: "Aktif İşler" },
+  { key: "done", title: "Tamamlananlar" },
+  { key: "web", title: "Web İşleri ve Teknik İşler" },
+  { key: "manager", title: "Yönetici Onayı" },
+  { key: "client", title: "Müşteri Onayı" },
+  { key: "other", title: "Diğer Görevler" },
+  { key: "ads", title: "Reklam Görevleri" },
+];
+const SOCIAL_FORMATS = new Set(["Reels", "Gönderi", "Hikâye", "Karusel", "Video"]);
+const AD_PLATFORMS = new Set(["Meta Reklam", "Google Reklam"]);
+
+/* Öncelik: teslim edilmiş → onay aşamaları → gecikme → iş türü (web / reklam / sosyal medya içeriği / diğer). */
+export function employeeBox(task, now = new Date(), timeZone = TIMEZONE) {
+  if (DELIVERED_STATUSES.has(task.status)) return "done";
+  if (task.status === "Yönetici Onayı") return "manager";
+  if (task.status === "Müşteri Onayı") return "client";
+  if (task.status === "Gecikti" || deadlineInfo(task, now, timeZone).state === "overdue") return "late";
+  if (task.format === "Web" || task.platform === "Web Sitesi") return "web";
+  if (task.format === "Reklam" || AD_PLATFORMS.has(task.platform)) return "ads";
+  if (SOCIAL_FORMATS.has(task.format)) return "active";
+  return "other";
+}

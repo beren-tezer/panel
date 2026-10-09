@@ -15,7 +15,7 @@ import {
   CONTENT_ACCEPT, REQUEST_STATUS, VERSION_STATUS, assetsOf, createMemoryContent, latestVersion, parsePortalPath, portalPath, requestsOf, reviewTarget,
   rotatedSlug, slugify, validateContentFile, validateRevisionNote, versionStatus, versionsOf,
 } from "./approvals.js";
-import { REVISION_LABELS, deadlineInfo, isPendingRevision, normalizeTime, revisionInfo, wallClock } from "./taskIndicators.js";
+import { EMPLOYEE_BOXES, REVISION_LABELS, deadlineInfo, employeeBox, isPendingRevision, normalizeTime, revisionInfo, wallClock } from "./taskIndicators.js";
 import {
   CHECK_CATEGORIES, CREATIVE_TASK_TYPES, DEFAULT_TEMPLATE_ITEMS, LOCKED_STATUSES, MAX_TEMPLATE_ITEMS, REVIEW_STATUSES, TASK_TYPES,
   checklistSummary, createMemoryChecklist, currentChecklist, cycleLabel, demoTemplates, incompleteMessage, indexChecklists, itemsOf,
@@ -28,7 +28,7 @@ import {
 } from "./rbac.js";
 import {
   Activity, AlertTriangle, Archive, ArrowDown, ArrowUp, Bold, BookOpen, Calendar, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp,
-  Circle, ClipboardCheck, ClipboardList, Clock, Copy, Download, ExternalLink, Eye, File as FileIcon, FileImage, FileText, Film, Flag, Folder, FolderOpen, HardDrive, Heading, History, ListChecks,
+  Circle, ClipboardCheck, Globe, Megaphone, ClipboardList, Clock, Copy, Download, ExternalLink, Eye, File as FileIcon, FileImage, FileText, Film, Flag, Folder, FolderOpen, HardDrive, Heading, History, ListChecks,
   Image as ImageIcon, Inbox, Italic, Layers, LayoutDashboard, LayoutGrid, Link as LinkIcon, List, ListOrdered, Lock, LogOut, Menu, MessageSquare,
   MoreHorizontal, Palette, Paperclip, PenTool, Pencil, Pilcrow, Plus, RefreshCw, RotateCcw, Search, Send, ShieldCheck, SlidersHorizontal, Sparkles, Star, Table, Trash2, Type, Unlink, Bell, Briefcase, UserPlus,
   Upload, User, Users, X,
@@ -937,10 +937,10 @@ function GlobalStyles() {
       .cw-scroll::-webkit-scrollbar{width:6px;height:6px}.cw-scroll::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:6px}.cw-scroll::-webkit-scrollbar-track{background:transparent}
       .cw-scroll{scrollbar-width:thin;scrollbar-color:#cbd5e1 transparent}
       .cw-brand-wrap{container-type:inline-size}
-      .cw-brand-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:stretch}
+      .cw-brand-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:start}
       @container (min-width:640px){.cw-brand-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}}
       @container (min-width:1200px){.cw-brand-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
-      .cw-brand-card{height:420px}
+      .cw-brand-card{height:288px;transition:height .2s ease}.cw-brand-card[data-expanded="true"]{height:420px}
       .cw-tasks{overscroll-behavior:contain;container-type:inline-size}
       @container (max-width:400px){.cw-rev-label{display:none}}
       .cw-row{transition:background-color .15s ease}
@@ -1874,6 +1874,12 @@ function TaskRow({ task }) {
 function BrandCard({ brand, tasks, onFocusBrand }) {
   const { openNewTask, can: allowed } = useWS();
   useNow(); // gecikme sayısı zamanla değişir
+  // Varsayılan olarak 1 görev; "Diğerlerini Göster" kartı aşağı doğru (en fazla 420px) açar, fazlası kart içinde kayar.
+  const [expanded, setExpanded] = useState(false);
+  const listRef = useRef(null);
+  const extra = Math.max(0, tasks.length - 1);
+  const open = expanded && extra > 0;
+  const toggle = () => { setExpanded((e) => !e); if (listRef.current) listRef.current.scrollTop = 0; };
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const closeMenu = useCallback(() => setMenuOpen(false), []);
@@ -1884,7 +1890,7 @@ function BrandCard({ brand, tasks, onFocusBrand }) {
   const pct = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
   const color = BRAND_COLORS[brand.color] || BRAND_COLORS.orange;
   return (
-    <article data-brand-card={brand.id} aria-label={`${brand.name} görevleri`} className="cw-brand-card flex flex-col min-w-0 overflow-hidden bg-white border border-slate-200 rounded-xl shadow-sm hover:border-slate-300 hover:shadow-md transition-[border-color,box-shadow] duration-150">
+    <article data-brand-card={brand.id} data-expanded={open ? "true" : "false"} aria-label={`${brand.name} görevleri`} className="cw-brand-card flex flex-col min-w-0 overflow-hidden bg-white border border-slate-200 rounded-xl shadow-sm hover:border-slate-300 hover:shadow-md transition-[border-color,box-shadow] duration-150">
       <header className="shrink-0 px-4 pt-3.5 pb-3 border-b border-slate-100" data-card-header="">
         <div className="flex items-center gap-2.5 min-w-0">
           <BrandLogo brand={brand} size={32} />
@@ -1922,14 +1928,20 @@ function BrandCard({ brand, tasks, onFocusBrand }) {
           ))}
         </dl>
       </header>
-      <div className="cw-tasks flex-1 min-h-0 overflow-y-auto cw-scroll px-1.5 py-1 divide-y divide-slate-100" data-card-tasks="" tabIndex={0} role="region" aria-label={`${brand.name} görev listesi`}>
-        {tasks.length ? tasks.map((t) => <TaskRow key={t.id} task={t} />) : (
+      <div ref={listRef} id={`cw-tasks-${brand.id}`} className={`cw-tasks flex-1 min-h-0 ${open ? "overflow-y-auto" : "overflow-hidden"} cw-scroll px-1.5 py-1 divide-y divide-slate-100`} data-card-tasks="" tabIndex={0} role="region" aria-label={`${brand.name} görev listesi`}>
+        {tasks.length ? (open ? tasks : tasks.slice(0, 1)).map((t) => <TaskRow key={t.id} task={t} />) : (
           <div className="h-full flex flex-col items-center justify-center text-center px-6">
             <Inbox size={20} className="text-slate-300" />
             <p className="cw-12 text-slate-500 mt-2">Bu markada gösterilecek görev yok.</p>
           </div>
         )}
       </div>
+      {extra > 0 && (
+        <button type="button" onClick={toggle} aria-expanded={open} aria-controls={`cw-tasks-${brand.id}`} data-card-toggle=""
+          className="shrink-0 mx-1.5 mb-1 h-8 inline-flex items-center justify-center gap-1 rounded-md cw-12 font-semibold text-orange-700 hover:bg-orange-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300">
+          {open ? <><ChevronUp size={14} />Daha Az Göster</> : <><ChevronDown size={14} />Diğerlerini Göster ({extra})</>}
+        </button>
+      )}
       <footer className="shrink-0 flex items-center gap-1 px-2 py-1.5 border-t border-slate-100" data-card-footer="">
         {allowed("canCreateTasks") ? <button type="button" onClick={() => openNewTask(brand.id)} className="flex-1 h-8 inline-flex items-center gap-1.5 px-2 rounded-md cw-12 font-medium text-slate-500 hover:text-orange-700 hover:bg-orange-50 transition-colors"><Plus size={14} />Görev ekle</button> : <span className="flex-1" />}
         <button type="button" onClick={() => onFocusBrand(brand.id, "kit")} title="Marka kılavuzu" className="h-8 inline-flex items-center gap-1.5 px-2 rounded-md cw-12 font-medium text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors"><BookOpen size={14} />Kılavuz</button>
@@ -4006,78 +4018,55 @@ function PreviewBanner({ actor, onExit, readOnly }) {
 
 /* ───────────────────────── Çalışan: Bugünkü İşlerim ───────────────────────── */
 
-const EMPLOYEE_ACTIONS = [
-  ["Başlanmadı", "Bekliyor", Circle],
-  ["Çalışılıyor", "Devam Ediyor", Activity],
-  ["Müşteri Onayı", "Onaya Gönder", Send],
-  ["Tamamlandı", "Tamamlandı", Check],
-];
-const ACTION_TOASTS = {
-  "Başlanmadı": "Görev “Bekliyor” olarak işaretlendi.",
-  "Çalışılıyor": "Görev “Devam Ediyor” olarak işaretlendi.",
-  "Müşteri Onayı": "İçerik müşteri onayına gönderildi.",
-  "Tamamlandı": "Görev tamamlandı olarak işaretlendi.",
+/* Çalışan ekranı kutuları (sıra ve sınıflandırma: taskIndicators.js EMPLOYEE_BOXES / employeeBox). */
+const BOX_META = {
+  late: [AlertTriangle, "text-red-600", "Geciken işiniz yok."],
+  active: [Activity, "text-sky-600", "Aktif işiniz yok."],
+  done: [CheckCircle2, "text-emerald-600", "Henüz tamamlanan iş yok."],
+  web: [Globe, "text-indigo-600", "Web veya teknik iş yok."],
+  manager: [ShieldCheck, "text-violet-600", "Yönetici onayında iş yok."],
+  client: [Briefcase, "text-amber-600", "Müşteri onayında iş yok."],
+  other: [Inbox, "text-slate-500", "Diğer görev yok."],
+  ads: [Megaphone, "text-rose-600", "Reklam görevi yok."],
 };
 
-function EmployeeStatusActions({ task }) {
-  const { updateTask, statusOptions } = useWS();
-  const options = statusOptions(task);
-  return (
-    <div className="flex flex-wrap gap-1" role="group" aria-label="Durum işlemleri">
-      {EMPLOYEE_ACTIONS.map(([status, label, Icon]) => {
-        const current = task.status === status;
-        const allowed = options.includes(status);
-        if (!allowed && !current) return null;
-        const submit = status === "Müşteri Onayı";
-        return (
-          <button key={status} type="button" disabled={current} aria-pressed={current}
-            onClick={(e) => { e.stopPropagation(); updateTask(task.id, { status }, ACTION_TOASTS[status]); }}
-            className={`h-7 px-2 inline-flex items-center gap-1 rounded-md cw-11 font-semibold border transition ${current ? "bg-slate-900 border-slate-900 text-white cursor-default" : submit ? "bg-orange-600 border-orange-600 text-white hover:bg-orange-700" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
-            <Icon size={12} />{current && submit ? "Onayda" : label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function EmployeeTaskCard({ task }) {
-  const { openTask, brandsById, attachmentsByTask, state } = useWS();
+function EmployeeBoxItem({ task }) {
+  const { openTask, brandsById } = useWS();
   const brand = brandsById[task.brandId];
-  const revision = task.status === "Revizyon" ? latestRevision(state.approvals, task.id) : null;
   return (
-    <article className="bg-white border border-slate-200 rounded-xl p-3.5 hover:border-slate-300 hover:shadow-sm transition-shadow flex flex-col gap-2.5 min-w-0">
-      <div className="flex items-center gap-2 min-w-0">
-        <BrandLogo brand={brand} size={22} />
-        <span className="cw-11 font-semibold text-slate-500 truncate flex-1">{brand?.name}</span>
-        <StatusPill status={task.status} small />
-      </div>
-      <button type="button" onClick={() => openTask(task.id)} className="text-left cw-13 font-semibold text-slate-900 hover:text-orange-700 cw-clamp2">{task.title}</button>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 cw-11 text-slate-500">
-        <DeadlineLabel task={task} />
-        <PriorityLabel priority={task.priority} />
-        <PlatformChip platform={task.platform} />
-        <span className="inline-flex items-center h-5 px-1.5 rounded-md border border-slate-200 cw-10 font-semibold uppercase tracking-wide">{task.format}</span>
-        <span className="inline-flex items-center gap-1.5 ml-auto"><ChecklistIndicator task={task} /><AttachmentIndicator attachments={attachmentsByTask[task.id] || EMPTY} /><FeedbackIndicator task={task} /></span>
-      </div>
-      {revision && (
-        <div className="rounded-lg border border-orange-200 bg-orange-50 px-2.5 py-2 cw-12 text-orange-900">
-          <p className="font-semibold flex items-center gap-1"><RotateCcw size={12} />Revize istendi · {USER_BY_ID[revision.userId]?.name || "Müşteri"}</p>
-          <p className="mt-0.5 text-orange-800 cw-clamp2">{revision.note}</p>
-        </div>
-      )}
-      <div className="pt-2 border-t border-slate-100"><EmployeeStatusActions task={task} /></div>
-    </article>
+    <li>
+      <button type="button" onClick={() => openTask(task.id)} data-box-task={task.id}
+        className="w-full text-left rounded-lg px-2.5 py-2 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300">
+        <span className="flex items-start gap-2">
+          <span className="flex-1 min-w-0 cw-13 font-medium text-slate-800 cw-clamp2">{task.title}</span>
+          <StatusPill status={task.status} small />
+        </span>
+        <span className="mt-1 flex items-center gap-1.5 cw-11 text-slate-500 min-w-0">
+          <BrandLogo brand={brand} size={14} /><span className="truncate min-w-0">{brand?.name}</span>
+          <span className="text-slate-300 shrink-0" aria-hidden="true">·</span><DeadlineLabel task={task} className="shrink-0" />
+          <span className="flex-1" /><ChecklistIndicator task={task} />
+        </span>
+      </button>
+    </li>
   );
 }
 
-function TaskSection({ title, icon: Icon, tasks, empty, tone = "text-slate-400" }) {
+/* Sabit yükseklikli kutu: başlık + sayı; görevler kutu içinde kayar (kutu uzamaz). */
+function EmployeeBox({ box, tasks }) {
+  const [Icon, tone, empty] = BOX_META[box.key];
+  const id = `eb-${box.key}`;
   return (
-    <section aria-label={title}>
-      <SectionTitle icon={Icon} right={<span className={`cw-11 font-semibold ${tone}`}>{tasks.length}</span>}>{title}</SectionTitle>
-      {tasks.length ? (
-        <div className="grid gap-3 grid-cols-1 md:grid-cols-2 2xl:grid-cols-3">{tasks.map((t) => <EmployeeTaskCard key={t.id} task={t} />)}</div>
-      ) : <p className="cw-12 text-slate-400 bg-white border border-dashed border-slate-200 rounded-xl px-4 py-5 text-center">{empty}</p>}
+    <section data-employee-box={box.key} aria-labelledby={id} className="flex flex-col h-[300px] bg-white border border-slate-200 rounded-xl overflow-hidden min-w-0">
+      <header className="shrink-0 flex items-center gap-2 px-3.5 h-11 border-b border-slate-100">
+        <Icon size={15} className={tone} aria-hidden="true" />
+        <h2 id={id} className="flex-1 min-w-0 cw-13 font-bold text-slate-900 truncate" title={box.title}>{box.title}</h2>
+        <span className={`cw-12 font-bold tabular-nums ${tasks.length ? tone : "text-slate-300"}`} data-box-count={tasks.length}>{tasks.length}</span>
+      </header>
+      <div className="flex-1 min-h-0 overflow-y-auto cw-scroll p-1.5" tabIndex={0} role="region" aria-label={`${box.title} listesi`}>
+        {tasks.length
+          ? <ul className="space-y-0.5">{tasks.map((t) => <EmployeeBoxItem key={t.id} task={t} />)}</ul>
+          : <p className="h-full flex items-center justify-center text-center cw-12 text-slate-400 px-4">{empty}</p>}
+      </div>
     </section>
   );
 }
@@ -4105,45 +4094,26 @@ function NotificationList({ items, onOpen, compact }) {
   );
 }
 
-function EmployeeDashboard({ search, brandId, onOpenNotification, onAllNotifications }) {
+function EmployeeDashboard({ search, brandId, onAllNotifications }) {
   const { state, actor, brandsById } = useWS();
+  const now = useNow(); // gecikme zamanla değişir
   const q = norm(search);
-  const mine = state.tasks.filter((t) => (brandId === "all" || t.brandId === brandId) && matchesSearch(q, t.title, brandsById[t.brandId]?.name, t.platform, t.format));
-  const soon = addDays(TODAY, 7);
-  const inReview = (t) => t.status === "Müşteri Onayı" || t.status === "Yönetici Onayı";
-  const working = (t) => isOpen(t) && !inReview(t) && t.status !== "Revizyon";
-  const byDue = (a, b) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999");
-  const revisions = mine.filter((t) => t.status === "Revizyon").sort(byDue);
-  const today = mine.filter((t) => working(t) && t.dueDate && t.dueDate <= TODAY).sort(byDue);
-  const upcoming = mine.filter((t) => working(t) && t.dueDate > TODAY && t.dueDate <= soon).sort(byDue);
-  const waiting = mine.filter((t) => inReview(t) || t.status === "Onaylandı").sort(byDue);
-  const recent = [...state.notifications].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 8);
-  const stats = [
-    ["Bugün", today.length, "text-orange-600"], ["Geciken", mine.filter(isOverdue).length, "text-red-600"],
-    ["Onayda", mine.filter(inReview).length, "text-violet-600"], ["Revize", revisions.length, "text-orange-700"],
-  ];
+  const groups = useMemo(() => {
+    const out = Object.fromEntries(EMPLOYEE_BOXES.map((b) => [b.key, []]));
+    state.tasks
+      .filter((t) => (brandId === "all" || t.brandId === brandId) && matchesSearch(q, t.title, brandsById[t.brandId]?.name, t.platform, t.format))
+      .forEach((t) => out[employeeBox(t, new Date(now))].push(t));
+    const byDue = (a, b) => `${a.dueDate || "9999"} ${a.dueTime || "99"}`.localeCompare(`${b.dueDate || "9999"} ${b.dueTime || "99"}`);
+    Object.entries(out).forEach(([k, list]) => list.sort(k === "done" ? (a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")) : byDue));
+    return out;
+  }, [state.tasks, brandId, q, brandsById, now]);
+  const unread = state.notifications.filter((n) => !n.readAt).length;
   return (
     <div className="space-y-5">
-      <PageHeader title="Bugünkü İşlerim" description={`Merhaba ${actor.name.split(" ")[0]}, ${fmtDateDay(TODAY)} için size atanan işler.`} />
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {stats.map(([l, v, c]) => (
-          <div key={l} className="p-3 rounded-xl border border-slate-200 bg-white">
-            <p className="cw-11 font-medium text-slate-500">{l}</p>
-            <p className={`mt-1 text-2xl font-bold tracking-tight tabular-nums ${c}`}>{v}</p>
-          </div>
-        ))}
-      </div>
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="space-y-6 min-w-0">
-          {revisions.length > 0 && <TaskSection title="Revize İstenenler" icon={RotateCcw} tasks={revisions} tone="text-orange-600" empty="" />}
-          <TaskSection title="Bugün Yapılacaklar" icon={Calendar} tasks={today} tone="text-orange-600" empty="Bugün için bekleyen işiniz yok." />
-          <TaskSection title="Yaklaşan Teslimler" icon={Clock} tasks={upcoming} empty="Önümüzdeki 7 gün için teslim yok." />
-          <TaskSection title="Onay Bekleyen İşlerim" icon={CheckCircle2} tasks={waiting} empty="Onay sürecinde işiniz yok." />
-        </div>
-        <aside className="bg-white border border-slate-200 rounded-xl p-3 h-fit">
-          <SectionTitle icon={Bell} right={<button type="button" onClick={onAllNotifications} className="cw-11 font-semibold text-orange-700 hover:underline">Tümü</button>}>Son Güncellemeler</SectionTitle>
-          <NotificationList items={recent} onOpen={onOpenNotification} compact />
-        </aside>
+      <PageHeader title="Bugünkü İşlerim" description={`Merhaba ${actor.name.split(" ")[0]}, ${fmtDateDay(TODAY)} için size atanan işler.`}
+        actions={<Btn size="sm" variant="secondary" onClick={onAllNotifications}><Bell size={14} />Bildirimler{unread ? ` (${unread})` : ""}</Btn>} />
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4" data-employee-boxes="">
+        {EMPLOYEE_BOXES.map((b) => <EmployeeBox key={b.key} box={b} tasks={groups[b.key]} />)}
       </div>
     </div>
   );
@@ -6965,7 +6935,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
         </section>
       </>
     );
-  } else if (currentPage === "my") pageNode = <EmployeeDashboard search={filters.search} brandId={selectedBrandId} onOpenNotification={openNotification} onAllNotifications={() => setPage("notifications")} />;
+  } else if (currentPage === "my") pageNode = <EmployeeDashboard search={filters.search} brandId={selectedBrandId} onAllNotifications={() => setPage("notifications")} />;
   else if (currentPage === "approvals") pageNode = <ApprovalsPage search={filters.search} brandId={selectedBrandId} />;
   else if (currentPage === "team") {
     pageNode = (

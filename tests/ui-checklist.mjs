@@ -7,7 +7,9 @@ const h = await startHarness({ port: 5181, debugPort: 9335 });
 const { page, viewport, key, check, consoleProblems, send } = h;
 const drawer = `$("aside[aria-label='Görev detayı']")`;
 const section = `$("[data-checklist]")`;
-const openTaskByTitle = (title) => page(`const b = $$("button").find((x) => x.textContent.trim() === ${JSON.stringify(title)}); b.click(); return !!b;`);
+// Görev başlığına göre açar: tablo / kart düğmesi veya çalışan ekranı kutu öğesi ([data-box-task]).
+const findTask = (title) => `($$("button").find((x) => x.textContent.trim() === ${JSON.stringify(title)}) || $$("[data-box-task]").find((x) => x.querySelector(".cw-clamp2")?.textContent.trim() === ${JSON.stringify(title)}))`;
+const openTaskByTitle = (title) => page(`const b = ${findTask(title)}; b.click(); return !!b;`);
 const waitDrawer = (title) => waitFor(() => page(`const d = ${drawer}; return d && d.querySelector("textarea[aria-label='Görev başlığı']").value.startsWith(${JSON.stringify(title)}) && !!d.querySelector("[data-checklist] [data-check-item]");`), 6000);
 const header = () => page(`return $("[id^='cl-title-']").textContent;`);
 const counts = () => page(`const m = $("[id^='cl-title-']").textContent.match(/(\\d+)\\/(\\d+)/); return m ? [+m[1], +m[2]] : null;`);
@@ -25,6 +27,8 @@ try {
   await waitFor(() => page(`return $$("[data-brand-card]").length > 0;`));
 
   /* ── 14. Pano: göstergeler, kart boyutları ve bağımsız kaydırma korunur ── */
+  // Kartlar varsayılan olarak 1 görev gösterir; "Diğerlerini Göster" ile açılan kartlarda tüm görevler kart içinde kayar.
+  await page(`$$("[data-card-toggle][aria-expanded='false']").forEach((b) => b.click()); await tick(400); return true;`);
   const board = await page(`const cards = $$("[data-brand-card]"); return {
     indicators: $$("[data-checklist-indicator]").length,
     sample: $("[data-checklist-indicator]")?.getAttribute("title"),
@@ -34,11 +38,11 @@ try {
     rows: $$("[data-task-row]").filter((r) => r.scrollWidth > r.clientWidth + 1).length,
   };`);
   check("Pano: kontrol göstergesi görünür (Kontrol: x/y)", board.indicators > 10 && /^Kontrol: \d+\/\d+/.test(board.sample), JSON.stringify(board));
-  check("Marka kartları eşit (420px), görev listesi kendi içinde kayar, satır taşması yok", board.heights === 1 && board.h === 420 && board.scroll && board.rows === 0, JSON.stringify(board));
+  check("Açılan marka kartları eşit (420px), görev listesi kendi içinde kayar, satır taşması yok", board.heights === 1 && board.h === 420 && board.scroll && board.rows === 0, JSON.stringify(board));
 
   /* ── Çalışan: Ayşe Demir ── */
   await switchRole("employee", "u2");
-  await waitFor(() => page(`return !!$$("button").find((x) => x.textContent.trim() === "Öğle menüsü duyuru serisi");`));
+  await waitFor(() => page(`return !!${findTask("Öğle menüsü duyuru serisi")};`));
   await openTaskByTitle("Öğle menüsü duyuru serisi");
   await waitDrawer("Öğle menüsü duyuru serisi");
   check("Görev detayında “İçerik Kontrolü — x/12 Tamamlandı” ve durum etiketi", /İçerik Kontrolü — \d+\/12 Tamamlandı/.test(await header())
@@ -71,8 +75,8 @@ try {
   await waitFor(async () => (await counts())[0] === before[0] + 1, 3000);
   const meta = await page(`const li = $$("[data-check-item]").find((x) => x.querySelector("[aria-checked='true']")); return li.textContent;`);
   check("Madde işaretlenince ilerleme artar; tamamlayan ve zaman görünür", meta.includes("Ayşe Demir") && /Bugün · \d\d:\d\d/.test(meta), `${before} → ${await counts()}`);
-  const indicatorNow = await page(`const t = $$("article").find((a) => a.textContent.includes("Öğle menüsü duyuru serisi")); return t?.querySelector("[data-checklist-indicator]")?.dataset.checklistIndicator;`);
-  check("Görev kartındaki gösterge aynı anda güncellenir", indicatorNow === `${before[0] + 1}/12`, indicatorNow);
+  const indicatorNow = await page(`const t = $$("[data-box-task]").find((a) => a.textContent.includes("Öğle menüsü duyuru serisi")); return t?.querySelector("[data-checklist-indicator]")?.dataset.checklistIndicator;`);
+  check("Çalışan ekranındaki görev göstergesi aynı anda güncellenir", indicatorNow === `${before[0] + 1}/12`, indicatorNow);
 
   /* Not ekleme */
   await page(`$$("[data-check-item] button[aria-label*='için not ekle']")[0].click();`);
@@ -125,7 +129,7 @@ try {
   await sleep(500);
 
   await switchRole("employee", "u2");
-  await waitFor(() => page(`return !!$$("button").find((x) => x.textContent.trim() === "Öğle menüsü duyuru serisi");`));
+  await waitFor(() => page(`return !!${findTask("Öğle menüsü duyuru serisi")};`));
   await openTaskByTitle("Öğle menüsü duyuru serisi");
   await waitDrawer("Öğle menüsü");
   const rev = await page(`return { cycle: $("[data-checklist-cycle]").dataset.checklistCycle, label: $("[data-checklist-cycle]").textContent, unlocked: $$("[data-checklist] button[role='checkbox']").some((b) => !b.disabled), header: $("[id^='cl-title-']").textContent };`);

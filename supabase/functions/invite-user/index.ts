@@ -14,7 +14,8 @@ const cors = {
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
 const ROLES = ["admin", "employee", "client"];
-const PERMISSIONS = ["canViewContent", "canEditContent", "canViewTasks", "canUpdateTasks", "canViewBrandFiles", "canAccessApprovals"];
+// rbac.js TOGGLEABLE_PERMISSIONS ile aynı liste (eksik izin sessizce düşer — bu yüzden ikisi birlikte güncellenmeli).
+const PERMISSIONS = ["canViewContent", "canEditContent", "canViewTasks", "canUpdateTasks", "canViewBrandFiles", "canAccessApprovals", "canEditBrandKit", "canManageChecklists"];
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -42,7 +43,8 @@ Deno.serve(async (req) => {
   if (role === "client" && !brandIds.length) return json({ error: "Müşteri için en az bir marka seçin." }, 400);
 
   const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
-    data: { full_name: name, role },
+    // Yalnızca görünen ad. Rol buradan okunmaz (008: yeni kullanıcı pasif müşteri olarak oluşur, rolü aşağıda atanır).
+    data: { full_name: name },
     redirectTo: typeof body.redirectTo === "string" ? body.redirectTo : undefined,
   });
   if (inviteError || !invited?.user) {
@@ -50,6 +52,12 @@ Deno.serve(async (req) => {
     return json({ error: msg }, 400);
   }
   const id = invited.user.id;
+
+  // Önce marka atamaları, en son aktifleştirme: herhangi bir adım başarısız olursa kullanıcı pasif kalır (hiçbir şey göremez).
+  if (role !== "admin" && brandIds.length) {
+    const { error: memberError } = await admin.from("brand_members").upsert(brandIds.map((brand_id) => ({ brand_id, user_id: id })));
+    if (memberError) return json({ error: `Marka ataması kaydedilemedi: ${memberError.message}` }, 500);
+  }
 
   const { error: profileError } = await admin.from("profiles").update({
     full_name: name,
@@ -61,11 +69,6 @@ Deno.serve(async (req) => {
     active: true,
   }).eq("id", id);
   if (profileError) return json({ error: `Profil kaydedilemedi: ${profileError.message}` }, 500);
-
-  if (role !== "admin" && brandIds.length) {
-    const { error: memberError } = await admin.from("brand_members").upsert(brandIds.map((brand_id) => ({ brand_id, user_id: id })));
-    if (memberError) return json({ error: `Marka ataması kaydedilemedi: ${memberError.message}` }, 500);
-  }
 
   return json({ id });
 });

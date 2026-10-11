@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { createMemorySource } from "./workspaceData.js";
+import { ROUTES, locationKey, navigate, resolveRoute, safeNext, subscribeLocation } from "./router.js";
 import {
   ACCEPT_ATTR, ASSET_CATEGORIES, COLOR_TYPES, FONT_ROLES, FONT_WEIGHTS, IMAGE_PREVIEW, INLINE_VIEWABLE, INSTRUCTION_CATEGORIES, LINK_CATEGORIES,
   MAX_BRAND_FILE_BYTES, VISIBILITY, createBrandKitStore, createMemoryBrandKit, formatBytes, normalizeHex, validateDriveUrl, validateHttpsUrl, validateUpload,
@@ -6673,7 +6674,7 @@ const SEARCH_PLACEHOLDERS = {
   users: "Kullanıcı veya e-posta ara…", notifications: "Bildirimlerde ara…", "client-home": "İçeriklerimde ara…", content: "İçeriklerimde ara…", pending: "Onay bekleyenlerde ara…", "client-files": "Görev, marka veya kişi ara…", "client-kit": "İçeriklerimde ara…", "client-history": "Onay geçmişinde ara…",
 };
 
-function Workspace({ state, dispatch, getState, createTasks, draftScope, contentApi, portalSlug, actorId, realUserId, onViewAs, allowImpersonation, onSignOut, syncError, denied, media, brandKit, checklistApi }) {
+function Workspace({ state, dispatch, getState, createTasks, draftScope, contentApi, portalSlug, portalKey, actorId, realUserId, onViewAs, allowImpersonation, onSignOut, syncError, denied, media, brandKit, checklistApi }) {
   const actor = state.users.find((u) => u.id === actorId) || state.users.find((u) => u.id === realUserId);
   const realUser = state.users.find((u) => u.id === realUserId);
   setDirectory(state.users, actor.id);
@@ -6838,6 +6839,8 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
   /* Müşteri onay bağlantısı (/onay/<adres>, /onay): adres yalnızca yönlendirir, yetki vermez. Markayı kullanıcı zaten
      görebiliyorsa (RLS) o markanın onay ekranı açılır; aksi halde — marka var olsun ya da olmasın — aynı mesaj gösterilir. */
   const [portal, setPortal] = useState(() => (portalSlug == null ? null : { slug: portalSlug, status: "pending" }));
+  // Adres değişince (geri / ileri, yeni marka bağlantısı) yeniden uygulanır.
+  useEffect(() => { setPortal(portalSlug == null ? null : { slug: portalSlug, status: "pending" }); }, [portalSlug, portalKey]);
   useEffect(() => {
     if (!portal || portal.status !== "pending") return;
     if (portal.slug === "*") { // /onay: tüm markaların onay ekranı
@@ -7105,8 +7108,15 @@ function useWorkspaceStore(source) {
       stateRef.current = loaded; setState(loaded); setPhase({ name: "ready" });
     } catch (err) {
       if (seq !== loadSeq.current) return;
-      if (err && err.code === "AUTH_REQUIRED") setPhase({ name: "auth" });
-      else setPhase({ name: "error", message: err?.message || "Veriler yüklenemedi." });
+      if (err && err.code === "AUTH_REQUIRED") {
+        // Oturum yok (çıkış / süresi doldu): önceki kullanıcının verisi bellekte tutulmaz.
+        stateRef.current = null; setState(null);
+        realRef.current = null; setRealUserId(null); viewAsRef.current = null; setViewAsId(null);
+        setPhase({ name: "auth" });
+      } else if (err && err.code === "NO_ACCESS") {
+        stateRef.current = null; setState(null);
+        setPhase({ name: "no-access", message: err.message });
+      } else setPhase({ name: "error", message: err?.message || "Veriler yüklenemedi." });
     }
   }, [source]);
 
@@ -7198,11 +7208,13 @@ function FullScreenMessage({ children }) {
 function LoginScreen({ auth }) {
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState({ name: "idle" });
+  // Giriş bağlantısı kullanıcıyı gitmek istediği sayfaya (ör. /onay/<marka>) geri getirir; yalnızca güvenli iç adresler.
+  const next = typeof window === "undefined" ? null : safeNext(new URLSearchParams(window.location.search).get("next"));
   const submit = async (e) => {
     e.preventDefault();
     if (!/^\S+@\S+\.\S+$/.test(email.trim())) { setStatus({ name: "error", message: "Geçerli bir e-posta adresi girin." }); return; }
     setStatus({ name: "sending" });
-    try { await auth.sendLink(email); setStatus({ name: "sent" }); }
+    try { await auth.sendLink(email, next || "/"); setStatus({ name: "sent" }); }
     catch (err) { setStatus({ name: "error", message: err?.message || "Bağlantı gönderilemedi." }); }
   };
   return (
@@ -7234,13 +7246,70 @@ function LoginScreen({ auth }) {
 
 /* `source` verilmezse demo (bellek içi) veriyle açılır. Canlıda:
    <App source={createSupabaseSource(supabase)} />  — bkz. workspaceData.js */
+/* Çıkışta kullanıcıya özel bellek içi önbellekler ve bu kullanıcının toplu giriş taslağı temizlenir. */
+function clearUserCaches(userId, draftScope) {
+  contentUrlCache.clear(); checkNoteDrafts.clear(); kitDrafts.clear(); dirtyKitForms.clear(); loadedKitFonts.clear();
+  syncKitUnloadGuard();
+  try { if (userId) window.localStorage.removeItem(draftKey(draftScope || "yerel", userId)); } catch { /* depolama kapalı */ }
+}
+
+function NoAccessScreen({ message, onSignOut, onRetry }) {
+  return (
+    <FullScreenMessage>
+      <div role="alert" className="cw-13 text-slate-700" data-no-access="">
+        <p className="flex items-center gap-2 font-semibold text-slate-900 mb-1"><Lock size={16} className="text-amber-600" />Erişim yetkiniz yok</p>
+        <p>{message || "Bu sayfayı görüntüleme yetkiniz bulunmuyor."}</p>
+        <div className="mt-4 flex gap-2">
+          {onRetry && <Btn variant="secondary" onClick={onRetry}><RefreshCw size={14} />Tekrar Kontrol Et</Btn>}
+          {onSignOut && <Btn variant="primary" onClick={onSignOut}><LogOut size={14} />Çıkış Yap</Btn>}
+        </div>
+      </div>
+    </FullScreenMessage>
+  );
+}
+
 export default function App({ source = demoSource }) {
   const { phase, state, dispatch, getState, createTasks, syncError, denied, reload, realUserId, viewAsId, viewAs } = useWorkspaceStore(source);
-  const portalSlug = useMemo(() => (typeof window === "undefined" ? null : parsePortalPath(window.location.pathname)), []);
-  const brandKit = useMemo(() => (source.brandKit ? createBrandKitStore(source.brandKit) : null), [source]);
-  const signOut = source.auth ? () => { source.auth.signOut().catch(() => {}); } : null;
+  // Marka kılavuzu önbelleği kullanıcıya özeldir: kullanıcı değişince yeniden oluşturulur.
+  const brandKit = useMemo(() => (source.brandKit ? createBrandKitStore(source.brandKit) : null), [source, realUserId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const signOut = source.auth ? () => { clearUserCaches(realUserId, source.draftScope); source.auth.signOut().catch(() => {}); } : null;
 
+  /* Rol bazlı yönlendirme: her konum değişikliğinde (bağlantı, geri/ileri, doğrudan adres) yeniden karar verilir.
+     Yönlendirme gerekiyorsa yanlış ekran hiç çizilmez. */
+  const loc = useSyncExternalStore(subscribeLocation, locationKey, () => "/");
+  const actor = state && phase.name === "ready" ? state.users.find((u) => u.id === (viewAsId || realUserId)) : null;
+  const routePhase = phase.name === "ready" && state ? "ready" : phase.name === "auth" && source.auth ? "auth" : phase.name;
+  const route = resolveRoute({ path: window.location.pathname, search: window.location.search, phase: routePhase, role: actor?.role || null });
+  const [staffFocus, setStaffFocus] = useState(null);
+  useEffect(() => {
+    if (!route.redirect) return;
+    // Ekip bir marka onay bağlantısıyla geldiyse ajans tarafındaki onay ekranı o markayla açılır.
+    if (route.portal && route.portal !== "*" && routePhase === "ready" && actor?.role !== "client") setStaffFocus({ slug: route.portal, n: Date.now() });
+    navigate(route.redirect, { replace: true });
+  }, [route.redirect, loc]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* Sekmeye dönüldüğünde rol / aktiflik sunucuda değiştiyse (veya oturum düştüyse) eski yetki kullanılmaz. */
+  const lastCheck = useRef(0);
+  useEffect(() => {
+    if (phase.name !== "ready" || !source.checkProfile) return undefined;
+    const onVisible = async () => {
+      if (document.visibilityState !== "visible" || Date.now() - lastCheck.current < 30 * 1000) return;
+      lastCheck.current = Date.now();
+      const p = await source.checkProfile().catch(() => undefined);
+      if (p === undefined) return;
+      const me = getState()?.users.find((u) => u.id === realUserId);
+      if (p === null || !me || p.id !== me.id || p.role !== me.role || p.active === false) reload();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [phase.name, source, realUserId, reload, getState]);
+
+  if (route.redirect) return <FullScreenMessage><p role="status" className="cw-13 text-slate-500 text-center">Yönlendiriliyor…</p></FullScreenMessage>;
   if (phase.name === "auth" && source.auth) return <LoginScreen auth={source.auth} />;
+  if (phase.name === "no-access") return <NoAccessScreen message={phase.message} onSignOut={signOut} onRetry={reload} />;
+  if (phase.name === "ready" && state && (!actor || !ROLES.includes(actor.role))) {
+    return <NoAccessScreen message="Hesabınızın rolü tanımlı değil. Ajans yöneticinizle iletişime geçin." onSignOut={signOut} />;
+  }
   if (phase.name === "error") {
     return (
       <FullScreenMessage>
@@ -7266,7 +7335,8 @@ export default function App({ source = demoSource }) {
     <Workspace
       state={state} dispatch={dispatch} getState={getState} createTasks={createTasks} draftScope={source.draftScope || null} actorId={viewAsId} realUserId={realUserId} onViewAs={viewAs}
       allowImpersonation={!!source.allowImpersonation} onSignOut={signOut} syncError={syncError} denied={denied} media={source.media || null} brandKit={brandKit}
-      checklistApi={source.checklist || null} contentApi={source.content || null} portalSlug={portalSlug}
+      checklistApi={source.checklist || null} contentApi={source.content || null}
+      portalSlug={actor?.role === "client" ? route.portal : staffFocus?.slug ?? null} portalKey={actor?.role === "client" ? loc : staffFocus?.n}
     />
   );
 }

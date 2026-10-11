@@ -36,6 +36,10 @@ import {
 export class AuthRequiredError extends Error {
   constructor() { super("Oturum açmanız gerekiyor."); this.code = "AUTH_REQUIRED"; }
 }
+/* Oturum geçerli ama profil yok / pasif / rol geçersiz: hiçbir korumalı ekran gösterilmez. */
+export class NoAccessError extends Error {
+  constructor(message) { super(message); this.code = "NO_ACCESS"; }
+}
 
 const taskCode = (no) => (no == null ? null : `CW-${no}`);
 
@@ -652,10 +656,11 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
     },
 
     auth: {
-      sendLink: async (email) => {
+      // redirectPath: giriş bağlantısının döneceği iç adres (router.safeNext ile doğrulanmış; ör. /onay/<marka>).
+      sendLink: async (email, redirectPath = "/") => {
         const { error } = await supabase.auth.signInWithOtp({
           email: email.trim(),
-          options: { shouldCreateUser: false, emailRedirectTo: window.location.origin + window.location.pathname },
+          options: { shouldCreateUser: false, emailRedirectTo: window.location.origin + (String(redirectPath).startsWith("/") && !String(redirectPath).startsWith("//") ? redirectPath : "/") },
         });
         if (!error) return;
         if (/signups? not allowed|user not found/i.test(error.message)) throw new Error("Bu e-posta ekipte kayıtlı değil. Yöneticinizden davet isteyin.");
@@ -663,6 +668,15 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
         throw error;
       },
       signOut: async () => { await flushDescriptions(); must(await supabase.auth.signOut()); },
+    },
+
+    /* Sekmeye dönüldüğünde: oturum hâlâ geçerli mi, rol / aktiflik sunucuda değişti mi (canlı güncelleme koptuysa bile). */
+    async checkProfile() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return null;
+      const { data, error } = await supabase.from("profiles").select("role, active").eq("id", session.user.id).maybeSingle();
+      if (error) return undefined; // ağ hatası: karar verilmez
+      return data ? { id: session.user.id, role: data.role, active: data.active } : { id: session.user.id, role: null, active: false };
     },
 
     onAuthChange(cb) {
@@ -702,7 +716,9 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
       checklistsAvailable = !!checklists && !!checklistItems;
       approvalsAvailable = !!versions && !!contentAssets && !!requests;
       const me = profiles.find((p) => p.id === session.user.id);
-      if (!me || !me.active) throw new Error("Hesabınız ekip üyesi olarak tanımlı değil. Yöneticinizle iletişime geçin.");
+      if (!me) throw new NoAccessError("Hesabınız için bir profil bulunamadı. Ajans yöneticinizden davet isteyin.");
+      if (!me.active) throw new NoAccessError("Hesabınız henüz etkinleştirilmedi veya erişiminiz kaldırıldı. Ajans yöneticinizle iletişime geçin.");
+      if (!["admin", "employee", "client"].includes(me.role)) throw new NoAccessError("Hesabınızın rolü tanımlı değil. Ajans yöneticinizle iletişime geçin.");
 
       // Son aktivite zamanı (hata olursa yükleme etkilenmez).
       supabase.from("profiles").update({ last_seen_at: new Date().toISOString() }).eq("id", me.id).then(() => {}, () => {});

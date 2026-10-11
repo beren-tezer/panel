@@ -232,8 +232,8 @@ try {
   await sleep(300);
   check("Geçersiz / yenilenmiş adres: bilgi sızdırmayan erişim yok mesajı", await page(`return !!$("[data-portal-denied]") && $("[data-portal-denied]").textContent.includes("erişiminiz yok");`));
   await send("Page.navigate", { url: `${base}/onay?demo` });
-  await waitFor(() => page(`return !!$("main") && document.body.textContent.includes("İçeriklerin iç onaydan");`), 8000).catch(() => {});
-  check("/onay: tüm markaların onay ekranı", await page(`return document.body.textContent.includes("İçeriklerin iç onaydan") && !$("[data-portal-denied]");`));
+  await waitFor(() => page(`return location.pathname === "/dashboard" && $$("[data-brand-card]").length > 0;`), 8000).catch(() => {});
+  check("/onay: ekip kullanıcısı müşteri portalına değil panele (/dashboard) yönlenir", await page(`return location.pathname === "/dashboard" && !$("[data-portal-denied]");`));
 
   check("Konsolda hata yok", consoleProblems.length === 0, consoleProblems.slice(0, 3).join(" || "));
 } catch (err) {

@@ -143,6 +143,10 @@ try {
   check("Kurulum: 2 ve 25 görevli kartlar", counts.cre === 2 && counts.spa === 25, JSON.stringify(counts));
 
   /* ── 1. Eşit kart ölçüleri ve iç kaydırma ── */
+  // Açılma animasyonu (0,2 sn) bitene kadar beklenir; kartlar kendiliğinden kapanırsa bu bekleme başarısız olur.
+  const settled = await waitFor(() => page(`const cs = $$("[data-brand-card]").filter((c) => c.querySelector("[data-card-toggle]"));
+    return cs.every((c) => c.dataset.expanded === "true" && Math.round(rect(c).h) === 420) ? true : null;`), 3000).catch(() => false);
+  if (!settled) console.log("   kart durumu:", await page(`return JSON.stringify($$("[data-brand-card]").map((c) => [c.dataset.expanded, Math.round(rect(c).h)]));`));
   const dims = await page(`const a = rect(card("Atlas Ajans")), b = rect(card("Sofra Pide")); const all = $$("[data-brand-card]").map(rect); return { a, b, heights: [...new Set(all.map((r) => Math.round(r.h)))], widths: [...new Set(all.map((r) => Math.round(r.w)))] };`);
   check("2 ve 25 görevli kart aynı dış ölçüde", Math.round(dims.a.w) === Math.round(dims.b.w) && Math.round(dims.a.h) === Math.round(dims.b.h), `${Math.round(dims.a.w)}×${Math.round(dims.a.h)} / ${Math.round(dims.b.w)}×${Math.round(dims.b.h)}`);
   check("Tüm kartlar aynı yükseklik ve genişlikte", dims.heights.length === 1 && dims.widths.length === 1, `yükseklik ${dims.heights} genişlik ${dims.widths}`);

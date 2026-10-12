@@ -29,7 +29,8 @@ export const HELPERS = `
   const tick = (ms = 120) => new Promise((r) => setTimeout(r, ms));
 `;
 
-export async function startHarness({ port = 5179, debugPort = 9333 } = {}) {
+// viteArgs: varsayılan geliştirme sunucusu; ör. ["preview", "--outDir", klasör] ile derlenmiş sürüm sunulur.
+export async function startHarness({ port = 5179, debugPort = 9333, viteArgs = [] } = {}) {
   const results = [];
   const consoleProblems = [];
   let reported = 0;
@@ -40,7 +41,7 @@ export async function startHarness({ port = 5179, debugPort = 9333 } = {}) {
     if (!ok && consoleProblems.length > reported) console.log("   konsol:", consoleProblems.slice(reported, reported + 3).join(" || "));
     reported = consoleProblems.length;
   };
-  const vite = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "--port", String(port), "--strictPort"], { stdio: "ignore" });
+  const vite = spawn(process.execPath, ["node_modules/vite/bin/vite.js", ...viteArgs, "--port", String(port), "--strictPort"], { stdio: "ignore" });
   const profile = mkdtempSync(join(tmpdir(), "cw-ui-"));
   const exe = [process.env.BROWSER, "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Google/Chrome/Application/chrome.exe", "/usr/bin/google-chrome", "/usr/bin/chromium"]
     .filter(Boolean).find((p) => existsSync(p));

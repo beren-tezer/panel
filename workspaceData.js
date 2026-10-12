@@ -14,6 +14,7 @@
  *                                    (null ise açıklama görselleri metne gömülür — yalnızca demo)
  *   brandKit?                      → marka kılavuzu API'si (bkz. brandKit.js)
  *   checklist?                     → kontrol listesi şablon/geçmiş API'si (bkz. checklist.js)
+ *   agreement?                     → { accept(version) } — ilk girişteki sözleşme onayı (state.agreement: { accepted } | null)
  *   content?                       → içerik sürümleri: createVersion / upload / removeAsset / urls / refresh (bkz. approvals.js)
  *
  *   createTasks(tasks, { activity, notifications }) → { codes: { taskId: "CW-…" }, checklists, checklistItems }
@@ -706,6 +707,16 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
       signOut: async () => { await flushDescriptions(); must(await supabase.auth.signOut()); },
     },
 
+    /* İlk girişte zorunlu sözleşme onayı: yalnızca oturumdaki kullanıcının kendi kaydı, sunucu fonksiyonuyla (009). */
+    agreement: {
+      async accept(version) {
+        const { error } = await supabase.rpc("accept_agreement", { p_version: String(version || "") });
+        if (!error) return;
+        if (["PGRST202", "42883"].includes(error.code)) throw new Error("Sözleşme onayı sunucuda henüz etkin değil (supabase/009_agreement.sql çalıştırılmalı).");
+        throw new Error("Onayınız kaydedilemedi. Bağlantınızı kontrol edip tekrar deneyin.");
+      },
+    },
+
     /* Sekmeye dönüldüğünde: oturum hâlâ geçerli mi, rol / aktiflik sunucuda değişti mi (canlı güncelleme koptuysa bile). */
     async checkProfile() {
       const { data: { session } } = await supabase.auth.getSession();
@@ -756,6 +767,11 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
       if (!me.active) throw new NoAccessError("Hesabınız henüz etkinleştirilmedi veya erişiminiz kaldırıldı. Ajans yöneticinizle iletişime geçin.");
       if (!["admin", "employee", "client"].includes(me.role)) throw new NoAccessError("Hesabınızın rolü tanımlı değil. Ajans yöneticinizle iletişime geçin.");
 
+      // Gizlilik ve Rekabet Sözleşmesi (009): sütun yoksa (009 çalıştırılmamış) onay ekranı devreye girmez.
+      const agreement = "agreement_accepted" in me
+        ? { accepted: me.agreement_accepted === true, acceptedAt: me.agreement_accepted_at || null, version: me.agreement_version || null }
+        : null;
+
       // Son aktivite zamanı (hata olursa yükleme etkilenmez).
       supabase.from("profiles").update({ last_seen_at: new Date().toISOString() }).eq("id", me.id).then(() => {}, () => {});
       const users = profiles.map(rowToUser);
@@ -780,6 +796,7 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
           contentAssets: approvalsAvailable ? contentAssets.map(rowToContentAsset) : [],
           approvalRequests: approvalsAvailable ? requests.map(rowToRequest) : [],
           features: { checklists: checklistsAvailable, approvals: approvalsAvailable },
+          agreement,
         },
       };
     },

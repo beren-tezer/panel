@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { createMemorySource } from "./workspaceData.js";
 import { ROUTES, locationKey, navigate, resolveRoute, safeNext, subscribeLocation } from "./router.js";
 import { MIN_PASSWORD, validatePasswordChange } from "./passwords.js";
+import { AGREEMENT_CONSENT, AGREEMENT_SECTIONS, AGREEMENT_TITLE, AGREEMENT_VERSION } from "./agreement.js";
 import {
   ACCEPT_ATTR, ASSET_CATEGORIES, COLOR_TYPES, FONT_ROLES, FONT_WEIGHTS, IMAGE_PREVIEW, INLINE_VIEWABLE, INSTRUCTION_CATEGORIES, LINK_CATEGORIES,
   MAX_BRAND_FILE_BYTES, VISIBILITY, createBrandKitStore, createMemoryBrandKit, formatBytes, normalizeHex, validateDriveUrl, validateHttpsUrl, validateUpload,
@@ -7766,6 +7767,60 @@ function ChangePasswordModal({ api, onClose, onDone }) {
   );
 }
 
+/* İlk girişte zorunlu "Gizlilik ve Rekabet Sözleşmesi". Onaylanmadan panelin hiçbir ekranı açılmaz (router.resolveRoute);
+   onay sunucuda kaydedilince veriler yeniden yüklenir ve kullanıcı gideceği sayfaya yönlendirilir. */
+function AgreementScreen({ onAccept, onSignOut }) {
+  const [checked, setChecked] = useState(false);
+  const [status, setStatus] = useState({ name: "idle" });
+  const saving = status.name === "saving";
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!checked) { setStatus({ name: "error", message: "Devam etmek için sözleşmeyi onaylamanız gerekiyor." }); return; }
+    setStatus({ name: "saving" });
+    try { await onAccept(AGREEMENT_VERSION); }
+    catch (err) { setStatus({ name: "error", message: err?.message || "Onayınız kaydedilemedi." }); }
+  };
+  return (
+    <div className="cw-root min-h-screen w-full flex items-start sm:items-center justify-center bg-slate-50 px-4 py-6" data-agreement="">
+      <GlobalStyles />
+      <form onSubmit={submit} noValidate className="w-full max-w-2xl bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col" style={{ maxHeight: "calc(100dvh - 3rem)" }}>
+        <header className="px-5 sm:px-6 pt-5 pb-4 border-b border-slate-100">
+          <div className="flex items-center gap-2.5">
+            <span className="h-9 w-9 shrink-0 rounded-xl bg-orange-500 text-white flex items-center justify-center"><ShieldCheck size={18} /></span>
+            <div className="min-w-0">
+              <h1 className="cw-15 font-semibold text-slate-900">{AGREEMENT_TITLE}</h1>
+              <p className="cw-12 text-slate-500">Panele ilk girişinizde bu sözleşmeyi okuyup onaylamanız gerekiyor.</p>
+            </div>
+          </div>
+        </header>
+        <div className="flex-1 min-h-0 overflow-y-auto px-5 sm:px-6 py-4 space-y-3.5 cw-13 text-slate-700 leading-relaxed" tabIndex={0} aria-label="Sözleşme metni" data-agreement-text="">
+          {AGREEMENT_SECTIONS.map((sec) => (
+            <section key={sec.heading}>
+              <h2 className="font-semibold text-slate-900 mb-0.5">{sec.heading}</h2>
+              <p>{sec.body}</p>
+            </section>
+          ))}
+          <p className="cw-11 text-slate-400">Sürüm: {AGREEMENT_VERSION}</p>
+        </div>
+        <footer className="px-5 sm:px-6 py-4 border-t border-slate-100 space-y-3">
+          <label className="flex items-start gap-2.5 cw-13 text-slate-800 cursor-pointer select-none">
+            <input type="checkbox" checked={checked} onChange={(e) => { setChecked(e.target.checked); if (status.name === "error") setStatus({ name: "idle" }); }}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-orange-600" data-agreement-consent="" />
+            <span>{AGREEMENT_CONSENT}</span>
+          </label>
+          {status.name === "error" && <p role="alert" className="cw-12 text-red-700">{status.message}</p>}
+          <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2">
+            {onSignOut ? <Btn variant="secondary" type="button" onClick={onSignOut} disabled={saving}><LogOut size={14} />Onaylamadan Çıkış Yap</Btn> : <span />}
+            <Btn variant="primary" type="submit" disabled={!checked || saving} className="justify-center">
+              {saving ? "Kaydediliyor…" : <><Check size={14} />Onaylıyorum, Devam Et</>}
+            </Btn>
+          </div>
+        </footer>
+      </form>
+    </div>
+  );
+}
+
 function NoAccessScreen({ message, onSignOut, onRetry }) {
   return (
     <FullScreenMessage>
@@ -7792,7 +7847,9 @@ export default function App({ source = demoSource }) {
   const loc = useSyncExternalStore(subscribeLocation, locationKey, () => "/");
   const actor = state && phase.name === "ready" ? state.users.find((u) => u.id === (viewAsId || realUserId)) : null;
   const routePhase = phase.name === "ready" && state ? "ready" : phase.name === "auth" && source.auth ? "auth" : phase.name;
-  const route = resolveRoute({ path: window.location.pathname, search: window.location.search, phase: routePhase, role: actor?.role || null });
+  // Sözleşme onayı oturumdaki gerçek kullanıcıya aittir (rol değiştirici ile önizlenen kullanıcıya değil).
+  const agreementAccepted = routePhase === "ready" && state.agreement ? state.agreement.accepted : undefined;
+  const route = resolveRoute({ path: window.location.pathname, search: window.location.search, phase: routePhase, role: actor?.role || null, agreementAccepted });
   const [staffFocus, setStaffFocus] = useState(null);
   useEffect(() => {
     if (!route.redirect) return;
@@ -7843,6 +7900,11 @@ export default function App({ source = demoSource }) {
         <p role="status" className="cw-13 text-slate-500 text-center">Çalışma alanı yükleniyor…</p>
       </FullScreenMessage>
     );
+  }
+  if (route.agreement) {
+    // Kaynak sözleşmeyi desteklemiyorsa (beklenmeyen durum) panel açılmaz.
+    if (!source.agreement) return <NoAccessScreen message="Sözleşme onayı şu anda alınamıyor. Ajans yöneticinizle iletişime geçin." onSignOut={signOut} onRetry={reload} />;
+    return <AgreementScreen onSignOut={signOut} onAccept={async (version) => { await source.agreement.accept(version); await reload(); }} />;
   }
   return (
     <Workspace

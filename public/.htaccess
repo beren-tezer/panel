@@ -31,4 +31,12 @@
   <FilesMatch "index\.html$">
     Header set Cache-Control "no-cache"
   </FilesMatch>
+  # PWA: service worker ve manifest her açılışta kontrol edilir (yeni sürüm gecikmeden yüklenir).
+  <FilesMatch "^(sw\.js|manifest\.webmanifest)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>
+
+<IfModule mod_mime.c>
+  AddType application/manifest+json .webmanifest
 </IfModule>

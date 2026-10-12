@@ -4,7 +4,9 @@
 --   • 5 demo ekip hesabı (@demo.example.com)
 --   • Demo seti için açılan 13 marka — YALNIZCA içinde başka (gerçek) görev kalmamışsa; üyelikleri ve marka kılavuzlarıyla birlikte
 --
--- Dokunmaz: Lumière Kafe ve görevleri, gerçek hesaplar (yöneticiler, calisan@ / musteri@example.com), demo dışı görevler.
+--   • Lumière Kafe test markası ve tüm görevleri
+--
+-- Dokunmaz: gerçek hesaplar (yöneticiler, calisan@ / musteri@example.com), demo dışı görevler.
 -- Tekrar çalıştırmak zararsızdır.
 
 begin;
@@ -18,6 +20,10 @@ where lower(b.name) in (
     'tepe emlak', 'sofra pide', 'mavitur tr/eng', '3 kartal perde', 'edva', 'gürel altyapı', 'velia clinic',
     'gelinay', 'mira business', 'şahin yalı', 'sdm', 'aek', 'atlas ajans')
   and not exists (select 1 from public.tasks t where t.brand_id = b.id);
+
+-- Lumière Kafe test markası (seed_demo.sql): görevleri ve marka (üyelikleri cascade ile gider).
+delete from public.tasks where brand_id in (select id from public.brands where lower(name) = lower('Lumière Kafe'));
+delete from public.brands where lower(name) = lower('Lumière Kafe');
 
 commit;
 

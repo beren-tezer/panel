@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useLayoutEffe
 import { createPortal } from "react-dom";
 import { createMemorySource } from "./workspaceData.js";
 import { ROUTES, locationKey, navigate, resolveRoute, safeNext, subscribeLocation } from "./router.js";
+import { MIN_PASSWORD, validatePasswordChange } from "./passwords.js";
 import {
   ACCEPT_ATTR, ASSET_CATEGORIES, COLOR_TYPES, FONT_ROLES, FONT_WEIGHTS, IMAGE_PREVIEW, INLINE_VIEWABLE, INSTRUCTION_CATEGORIES, LINK_CATEGORIES,
   MAX_BRAND_FILE_BYTES, VISIBILITY, createBrandKitStore, createMemoryBrandKit, formatBytes, normalizeHex, validateDriveUrl, validateHttpsUrl, validateUpload,
@@ -29,7 +30,7 @@ import {
 } from "./rbac.js";
 import {
   Activity, AlertTriangle, Archive, ArrowDown, ArrowUp, Bold, BookOpen, Calendar, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp,
-  Circle, ClipboardCheck, EyeOff, Globe, Megaphone, ClipboardList, Clock, Copy, Download, ExternalLink, Eye, File as FileIcon, FileImage, FileText, Film, Flag, Folder, FolderOpen, HardDrive, Heading, History, ListChecks,
+  Circle, ClipboardCheck, EyeOff, KeyRound, Globe, Megaphone, ClipboardList, Clock, Copy, Download, ExternalLink, Eye, File as FileIcon, FileImage, FileText, Film, Flag, Folder, FolderOpen, HardDrive, Heading, History, ListChecks,
   Image as ImageIcon, Inbox, Italic, Layers, LayoutDashboard, LayoutGrid, Link as LinkIcon, List, ListOrdered, Lock, LogOut, Menu, MessageSquare,
   MoreHorizontal, Palette, Paperclip, PenTool, Pencil, Pilcrow, Plus, RefreshCw, RotateCcw, Search, Send, ShieldCheck, SlidersHorizontal, Sparkles, Star, Table, Trash2, Type, Unlink, Bell, Briefcase, UserPlus,
   Upload, User, Users, X,
@@ -1483,7 +1484,7 @@ const shortName = (name) => {
 
 /* ───────────────────────── Kenar çubuğu ───────────────────────── */
 
-function Sidebar({ open, onClose, navItems, activeNav, onNav, counts, selectedBrandId, onSelectBrand, onNewBrand, onMyTasks, onResetFilters, onSignOut, switcher }) {
+function Sidebar({ open, onClose, navItems, activeNav, onNav, counts, selectedBrandId, onSelectBrand, onNewBrand, onMyTasks, onResetFilters, onSignOut, onChangePassword, switcher }) {
   const { state } = useWS();
   const [q, setQ] = useState("");
   const [profileAnchor, setProfileAnchor] = useState(null);
@@ -1611,6 +1612,7 @@ function Sidebar({ open, onClose, navItems, activeNav, onNav, counts, selectedBr
                 [User, "Bana Atanan Görevler", onMyTasks],
                 [RotateCcw, "Tüm Filtreleri Sıfırla", onResetFilters],
                 [Plus, "Yeni Marka Ekle", onNewBrand],
+                [KeyRound, "Şifremi Değiştir", onChangePassword],
                 [LogOut, "Çıkış Yap", onSignOut],
               ].filter(([, , fn]) => fn).map(([Icon, label, fn]) => (
                 <button key={label} type="button" onClick={() => { setProfileOpen(false); fn(); }} className="w-full flex items-center gap-2.5 h-8 px-2 rounded-md cw-12 text-slate-700 hover:bg-slate-50">
@@ -6674,7 +6676,7 @@ const SEARCH_PLACEHOLDERS = {
   users: "Kullanıcı veya e-posta ara…", notifications: "Bildirimlerde ara…", "client-home": "İçeriklerimde ara…", content: "İçeriklerimde ara…", pending: "Onay bekleyenlerde ara…", "client-files": "Görev, marka veya kişi ara…", "client-kit": "İçeriklerimde ara…", "client-history": "Onay geçmişinde ara…",
 };
 
-function Workspace({ state, dispatch, getState, createTasks, draftScope, contentApi, portalSlug, portalKey, actorId, realUserId, onViewAs, allowImpersonation, onSignOut, syncError, denied, media, brandKit, checklistApi }) {
+function Workspace({ state, dispatch, getState, createTasks, draftScope, contentApi, accountApi, portalSlug, portalKey, actorId, realUserId, onViewAs, allowImpersonation, onSignOut, syncError, denied, media, brandKit, checklistApi }) {
   const actor = state.users.find((u) => u.id === actorId) || state.users.find((u) => u.id === realUserId);
   const realUser = state.users.find((u) => u.id === realUserId);
   setDirectory(state.users, actor.id);
@@ -6706,6 +6708,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
   const [folderId, setFolderId] = useState(null);
   const [toast, setToast] = useState(null);
   const [override, setOverride] = useState(null);
+  const [passwordOpen, setPasswordOpen] = useState(false);
   const mainRef = useRef(null);
   const workspaceRef = useRef(null);
   const searchRef = useRef(null);
@@ -6976,6 +6979,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
           onMyTasks={role === "client" ? null : () => { setFilters({ ...emptyFilters(), assignee: actor.id }); setPage("ops"); setTab(role === "employee" ? "table" : "feed"); notify("Size atanan görevler listelendi.", "info"); }}
           onResetFilters={() => { clearFilters(); setSelectedBrandId("all"); notify("Tüm filtreler sıfırlandı.", "info"); }}
           onSignOut={onSignOut}
+          onChangePassword={accountApi && actor.id === realUserId ? () => setPasswordOpen(true) : null}
           switcher={showSwitcher ? <RoleSwitcher actor={actor} realUserId={realUserId} onChange={onViewAs} previewOnly={!allowImpersonation} directory={{ users: state.users, memberships: state.memberships, tasks: state.tasks }} /> : null}
         />
 
@@ -7028,6 +7032,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
           setOverride(null);
         }} />}
         {contentId && <ContentDetailModal taskId={contentId} onClose={() => setContentId(null)} />}
+        {passwordOpen && accountApi && <ChangePasswordModal api={accountApi} onClose={() => setPasswordOpen(false)} onDone={() => { setPasswordOpen(false); notify("Şifreniz güncellendi. Bir sonraki girişte yeni şifrenizi kullanın."); }} />}
 
         {newTask && (
           <NewTaskModal
@@ -7285,6 +7290,58 @@ function clearUserCaches(userId, draftScope) {
   try { if (userId) window.localStorage.removeItem(draftKey(draftScope || "yerel", userId)); } catch { /* depolama kapalı */ }
 }
 
+/* "Şifremi Değiştir": şifreyle girilmiş oturumda mevcut şifre sorulur; e-posta bağlantısıyla girilmişse sorulmaz. */
+function ChangePasswordModal({ api, onClose, onDone }) {
+  const [ctx, setCtx] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+  const [form, setForm] = useState({ current: "", next: "", repeat: "" });
+  const [errors, setErrors] = useState({});
+  const [show, setShow] = useState(false);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    api.passwordContext().then((c) => { if (alive) setCtx(c); }, (e) => { if (alive) setLoadError(e?.message || "Oturum bilgisi alınamadı."); });
+    return () => { alive = false; };
+  }, [api]);
+  const set = (k, v) => { setForm((f) => ({ ...f, [k]: v })); setErrors((e) => ({ ...e, [k]: "", form: "" })); };
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!ctx || saving) return;
+    const errs = validatePasswordChange(form, ctx.needsCurrent);
+    setErrors(errs);
+    if (Object.keys(errs).length) return;
+    setSaving(true);
+    try { await api.changePassword({ current: form.current, next: form.next }); onDone(); }
+    catch (err) { setErrors({ [err?.field || "form"]: err?.message || "Şifre güncellenemedi." }); setSaving(false); }
+  };
+  const type = show ? "text" : "password";
+  return (
+    <Modal title="Şifremi Değiştir" subtitle={ctx?.email} onClose={onClose} width={440}
+      footer={<><Btn variant="secondary" onClick={onClose}>Vazgeç</Btn><Btn variant="primary" type="submit" form="cw-password" disabled={!ctx || saving}>{saving ? "Kaydediliyor…" : <><KeyRound size={14} />Şifreyi Güncelle</>}</Btn></>}>
+      {loadError ? <p role="alert" className="cw-13 text-red-700">{loadError}</p> : !ctx ? <p className="cw-13 text-slate-500" aria-busy="true">Yükleniyor…</p> : (
+        <form id="cw-password" onSubmit={submit} noValidate className="space-y-3.5" data-password-form="">
+          {ctx.needsCurrent ? (
+            <Field label="Mevcut Şifre" error={errors.current}>
+              <input type={type} autoFocus autoComplete="current-password" value={form.current} onChange={(e) => set("current", e.target.value)} className={inputCls(errors.current)} />
+            </Field>
+          ) : <p className="cw-12 text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">E-posta bağlantısıyla giriş yaptığınız için mevcut şifre sorulmaz. Bundan sonra e-posta ve bu şifreyle de giriş yapabilirsiniz.</p>}
+          <Field label="Yeni Şifre" error={errors.next}>
+            <input type={type} autoFocus={!ctx.needsCurrent} autoComplete="new-password" value={form.next} onChange={(e) => set("next", e.target.value)} className={inputCls(errors.next)} />
+          </Field>
+          <Field label="Yeni Şifre (Tekrar)" error={errors.repeat}>
+            <input type={type} autoComplete="new-password" value={form.repeat} onChange={(e) => set("repeat", e.target.value)} className={inputCls(errors.repeat)} />
+          </Field>
+          <label className="inline-flex items-center gap-2 cw-12 text-slate-600 cursor-pointer select-none">
+            <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} className="h-4 w-4 accent-orange-600" />Şifreleri göster
+          </label>
+          <p className="cw-11 text-slate-500">En az {MIN_PASSWORD} karakter; en az bir harf ve bir rakam içermeli.</p>
+          {errors.form && <p role="alert" className="cw-12 text-red-700">{errors.form}</p>}
+        </form>
+      )}
+    </Modal>
+  );
+}
+
 function NoAccessScreen({ message, onSignOut, onRetry }) {
   return (
     <FullScreenMessage>
@@ -7367,7 +7424,7 @@ export default function App({ source = demoSource }) {
     <Workspace
       state={state} dispatch={dispatch} getState={getState} createTasks={createTasks} draftScope={source.draftScope || null} actorId={viewAsId} realUserId={realUserId} onViewAs={viewAs}
       allowImpersonation={!!source.allowImpersonation} onSignOut={signOut} syncError={syncError} denied={denied} media={source.media || null} brandKit={brandKit}
-      checklistApi={source.checklist || null} contentApi={source.content || null}
+      checklistApi={source.checklist || null} contentApi={source.content || null} accountApi={source.account || null}
       portalSlug={actor?.role === "client" ? route.portal : staffFocus?.slug ?? null} portalKey={actor?.role === "client" ? loc : staffFocus?.n}
     />
   );

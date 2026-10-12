@@ -63,6 +63,30 @@ try {
   await login("calisan@demo.test", "Demo1234");
   await waitFor(() => page(`return location.pathname === "/dashboard" && !!$("[data-employee-boxes]");`), 8000).catch(() => {});
   check("Çalışan /dashboard'a gider (8 kutu)", (await path()) === "/dashboard?authdemo" && await page(`return $$("[data-employee-box]").length === 8;`), await path());
+  /* Şifremi Değiştir */
+  const openPw = async () => {
+    await page(`const b = $$("aside button").at(-1); b.click(); await tick(200); const x = $$("[data-cw-popover] button").find((y) => y.textContent.includes("Şifremi Değiştir")); x.click(); return !!x;`);
+    await waitFor(() => page(`return !!$("[data-password-form]");`), 3000);
+  };
+  const pwSet = (cur, next, rep) => page(`const f = $("[data-password-form]"); const i = $$("input[type='password'], input[type='text']", f);
+    setValue(i[0], ${JSON.stringify(cur)}); setValue(i[1], ${JSON.stringify(next)}); setValue(i[2], ${JSON.stringify(rep)}); exact("button", "Şifreyi Güncelle").click(); return true;`);
+  await openPw();
+  check("Profil menüsünde “Şifremi Değiştir”; şifreyle girişte mevcut şifre sorulur", await page(`return $("[data-password-form]").textContent.includes("Mevcut Şifre");`));
+  await pwSet("Demo1234", "Yeni12345", "Yeni1234");
+  check("Tekrar eşleşmezse kaydedilmez", await waitFor(() => page(`return $("[data-password-form]").textContent.includes("Şifreler eşleşmiyor.");`), 2000).catch(() => false));
+  await pwSet("yanlis-sifre", "Yeni12345", "Yeni12345");
+  check("Mevcut şifre yanlışsa kaydedilmez", await waitFor(() => page(`return $("[data-password-form]").textContent.includes("Mevcut şifreniz hatalı.");`), 3000).catch(() => false));
+  await pwSet("Demo1234", "kisa", "kisa");
+  check("Zayıf şifre reddedilir", await waitFor(() => page(`return $("[data-password-form]").textContent.includes("en az 8");`), 2000).catch(() => false));
+  await pwSet("Demo1234", "Yeni12345", "Yeni12345");
+  check("Şifre güncellenir", await waitFor(() => page(`return !$("[data-password-form]") && document.body.textContent.includes("Şifreniz güncellendi");`), 3000).catch(() => false));
+  await logout();
+  await waitFor(() => page(`return location.pathname === "/login";`), 5000).catch(() => {});
+  await login("calisan@demo.test", "Demo1234");
+  check("Eski şifreyle giriş yapılamaz", await waitFor(() => page(`return document.body.textContent.includes("E-posta veya şifre hatalı.");`), 3000).catch(() => false));
+  await page(`setValue($("input[aria-label='Şifre']"), "Yeni12345"); exact("button", "Giriş Yap").click(); return true;`);
+  check("Yeni şifreyle giriş yapılır", await waitFor(() => page(`return location.pathname === "/dashboard" && !!$("[data-employee-boxes]");`), 6000).catch(() => false));
+
   check("Çalışanda yönetim menüleri yok", await page(`return !$$("aside button").some((b) => /Ekip & Marka|Kullanıcılar & Yetkiler/.test(b.textContent));`));
 
   check("Konsolda hata yok", consoleProblems.length === 0, consoleProblems.slice(0, 3).join(" || "));

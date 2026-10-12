@@ -27,6 +27,7 @@
  */
 
 import { createSupabaseBrandKit } from "./brandKit.js";
+import { signedInWithEmailLink } from "./passwords.js";
 import { CONTENT_BUCKET, MAX_CONTENT_BYTES, latestVersion, pendingRequest, validateContentFile } from "./approvals.js";
 import {
   checklistError, createSupabaseChecklist, currentChecklist, incompleteMessage, isMissingRelation, itemsOf, missingForSubmit,
@@ -653,6 +654,33 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
         }
       });
       return () => { supabase.removeChannel(channel); };
+    },
+
+    /* "Şifremi Değiştir": şifreyle girilmiş oturumda önce mevcut şifre doğrulanır (açık unutulmuş oturumdan
+       değiştirilemez); e-posta bağlantısıyla girilmişse sorulmaz (henüz şifresi olmayan kullanıcı ilk şifresini belirler). */
+    account: {
+      async passwordContext() {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) throw new Error("Oturumunuz sona ermiş. Tekrar giriş yapın.");
+        return { email: session.user.email, needsCurrent: !signedInWithEmailLink(session.access_token) };
+      },
+      async changePassword({ current, next }) {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) throw new Error("Oturumunuz sona ermiş. Tekrar giriş yapın.");
+        if (!signedInWithEmailLink(session.access_token)) {
+          const { error: verifyError } = await supabase.auth.signInWithPassword({ email: session.user.email, password: current || "" });
+          if (verifyError) {
+            if (verifyError.status === 429 || /rate limit|too many/i.test(verifyError.message)) throw new Error("Çok fazla deneme yapıldı. Birkaç dakika sonra tekrar deneyin.");
+            throw Object.assign(new Error("Mevcut şifreniz hatalı."), { field: "current" });
+          }
+        }
+        const { error } = await supabase.auth.updateUser({ password: next });
+        if (!error) return;
+        if (/same|different/i.test(error.message)) throw Object.assign(new Error("Yeni şifre mevcut şifrenizden farklı olmalı."), { field: "next" });
+        if (/weak|short|length|characters/i.test(error.message)) throw Object.assign(new Error("Şifre yeterince güçlü değil."), { field: "next" });
+        if (/reauth|recent|nonce/i.test(error.message)) throw new Error("Güvenlik için çıkış yapıp tekrar giriş yaptıktan sonra şifrenizi değiştirin.");
+        throw new Error("Şifre güncellenemedi. Bağlantınızı kontrol edip tekrar deneyin.");
+      },
     },
 
     auth: {

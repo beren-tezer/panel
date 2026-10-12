@@ -1874,6 +1874,10 @@ function TaskRow({ task }) {
 }
 
 /* Marka kartı: tüm kartlar aynı yükseklikte (420px); başlık ve alt bilgi sabit, görev listesi kendi içinde kayar. */
+/* Kartın başında açık iş görünür; tamamlanan / onaylanan görevler (seçili sıralamayı koruyarak) sona alınır. */
+const FINISHED = new Set(["Tamamlandı", "Onaylandı"]);
+const activeFirst = (list) => [...list.filter((t) => !FINISHED.has(t.status)), ...list.filter((t) => FINISHED.has(t.status))];
+
 function BrandCard({ brand, tasks, onFocusBrand }) {
   const { openNewTask, can: allowed } = useWS();
   useNow(); // gecikme sayısı zamanla değişir
@@ -1972,7 +1976,7 @@ function DailyFeed({ brands, tasks, hasActiveFilters, onClear, onFocusBrand }) {
   return (
     <div className="cw-brand-wrap">
       <div className="cw-brand-grid">
-        {groups.map((g) => <BrandCard key={g.brand.id} brand={g.brand} tasks={g.tasks} onFocusBrand={onFocusBrand} />)}
+        {groups.map((g) => <BrandCard key={g.brand.id} brand={g.brand} tasks={activeFirst(g.tasks)} onFocusBrand={onFocusBrand} />)}
       </div>
     </div>
   );
@@ -6883,7 +6887,8 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
     setPage("ops");
     if (key === "overview") { setTab("feed"); setFilter("dateScope", "all"); setOverviewOpen(true); scrollTop(); }
     if (key === "today") { setTab("feed"); setFilter("dateScope", "today"); scrollToWorkspace(); }
-    if (key === "plan") { setTab("table"); scrollToWorkspace(); }
+    // "Günlük Operasyon Akışı"nın koyduğu Bugün süzgeci planlayıcıda takılı kalmaz (menüdeki sayı ile liste aynı olur).
+    if (key === "plan") { setTab("table"); if (filters.dateScope === "today") setFilter("dateScope", "all"); scrollToWorkspace(); }
     if (key === "files") { setTab("files"); scrollToWorkspace(); }
     if (key === "kit") { setTab("kit"); scrollToWorkspace(); }
     if (key === "filters") {

@@ -17,7 +17,8 @@
     "test:approvals:dev": "node --experimental-websocket tests/approvals-supabase.mjs",
     "test:ui:employee": "node --experimental-websocket tests/ui-employee.mjs",
     "test:ui:routing": "node --experimental-websocket tests/ui-routing.mjs",
-    "test:ui:auth": "node --experimental-websocket tests/ui-auth.mjs"
+    "test:ui:auth": "node --experimental-websocket tests/ui-auth.mjs",
+    "test:ui:plan": "node --experimental-websocket tests/ui-plan.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",

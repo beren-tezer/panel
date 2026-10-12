@@ -17,7 +17,9 @@ import {
   CONTENT_ACCEPT, REQUEST_STATUS, VERSION_STATUS, assetsOf, createMemoryContent, latestVersion, parsePortalPath, portalPath, requestsOf, reviewTarget,
   rotatedSlug, slugify, validateContentFile, validateRevisionNote, versionStatus, versionsOf,
 } from "./approvals.js";
-import { EMPLOYEE_BOXES, REVISION_LABELS, deadlineInfo, employeeBox, isPendingRevision, normalizeTime, revisionInfo, wallClock } from "./taskIndicators.js";
+import {
+  EMPLOYEE_BOXES, OPS_BOXES, REVISION_LABELS, deadlineInfo, employeeBox, isPendingRevision, normalizeTime, opsBox, opsMetrics, planDate, revisionInfo, wallClock, weekOfMonth,
+} from "./taskIndicators.js";
 import {
   CHECK_CATEGORIES, CREATIVE_TASK_TYPES, DEFAULT_TEMPLATE_ITEMS, LOCKED_STATUSES, MAX_TEMPLATE_ITEMS, REVIEW_STATUSES, TASK_TYPES,
   checklistSummary, createMemoryChecklist, currentChecklist, cycleLabel, demoTemplates, incompleteMessage, indexChecklists, itemsOf,
@@ -29,7 +31,7 @@ import {
   scopeBrandKit, scopeState, statusOptionsFor,
 } from "./rbac.js";
 import {
-  Activity, AlertTriangle, Archive, ArrowDown, ArrowUp, Bold, BookOpen, Calendar, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp,
+  Activity, AlertTriangle, Archive, ArrowDown, ArrowUp, Bold, BookOpen, Calendar, CalendarDays, CalendarRange, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
   Circle, ClipboardCheck, EyeOff, KeyRound, Globe, Megaphone, ClipboardList, Clock, Copy, Download, ExternalLink, Eye, File as FileIcon, FileImage, FileText, Film, Flag, Folder, FolderOpen, HardDrive, Heading, History, ListChecks,
   Image as ImageIcon, Inbox, Italic, Layers, LayoutDashboard, LayoutGrid, Link as LinkIcon, List, ListOrdered, Lock, LogOut, Menu, MessageSquare,
   MoreHorizontal, Palette, Paperclip, PenTool, Pencil, Pilcrow, Plus, RefreshCw, RotateCcw, Search, Send, ShieldCheck, SlidersHorizontal, Sparkles, Star, Table, Trash2, Type, Unlink, Bell, Briefcase, UserPlus,
@@ -935,7 +937,11 @@ function GlobalStyles() {
   return (
     <style>{`
       .cw-root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;color:#0f172a}
-      .cw-10{font-size:10px;line-height:14px}.cw-11{font-size:11px;line-height:16px}.cw-12{font-size:12px;line-height:17px}.cw-13{font-size:13px;line-height:19px}
+      .cw-10{font-size:10px;line-height:14px}.cw-11{font-size:11px;line-height:16px}.cw-12{font-size:12px;line-height:17px}.cw-13{font-size:13px;line-height:19px}.cw-14{font-size:14px;line-height:20px}.cw-15{font-size:15px;line-height:21px}
+      .cw-plan-list{container-type:inline-size}
+      .cw-plan-row{display:grid;grid-template-columns:auto 1fr auto;grid-template-areas:"date day status" "title title title" "meta meta meta";gap:4px 10px;align-items:center;padding:8px 10px}
+      .cw-plan-date{grid-area:date}.cw-plan-day{grid-area:day}.cw-plan-title{grid-area:title}.cw-plan-meta{grid-area:meta}.cw-plan-status{grid-area:status}
+      @container (min-width:720px){.cw-plan-row{grid-template-columns:100px 84px minmax(0,1fr) auto 150px;grid-template-areas:"date day title meta status";padding:6px 12px;min-height:44px}}
       .cw-scroll::-webkit-scrollbar{width:6px;height:6px}.cw-scroll::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:6px}.cw-scroll::-webkit-scrollbar-track{background:transparent}
       .cw-scroll{scrollbar-width:thin;scrollbar-color:#cbd5e1 transparent}
       .cw-brand-wrap{container-type:inline-size}
@@ -4126,6 +4132,415 @@ function EmployeeDashboard({ search, brandId, onAllNotifications }) {
   );
 }
 
+/* ───────────────────────── Admin: Operasyon masası (4 sayaç + 8 grup) ───────────────────────── */
+
+const isAgencyBrand = (brand) => !!brand && (/ajans/i.test(brand.sector || ""));
+const OPS_META = {
+  urgent: [AlertTriangle, "text-red-600", "border-t-red-500", "Geciken veya acil iş yok."],
+  manager: [ShieldCheck, "text-violet-600", "border-t-violet-500", "Yönetici onayında iş yok."],
+  client: [Briefcase, "text-amber-600", "border-t-amber-500", "Müşteri yanıtı beklenen iş yok."],
+  active: [Activity, "text-sky-600", "border-t-sky-500", "Aktif çalışma yok."],
+  done: [CheckCircle2, "text-emerald-600", "border-t-emerald-500", "Son 7 günde tamamlanan iş yok."],
+  web: [Globe, "text-indigo-600", "border-t-indigo-500", "Web veya teknik iş yok."],
+  agency: [Sparkles, "text-orange-600", "border-t-orange-500", "Ajans içi iş yok."],
+  ads: [Megaphone, "text-rose-600", "border-t-rose-500", "Reklam işi yok."],
+};
+
+function OpsBoxItem({ task, showStatus }) {
+  const { openTask, brandsById } = useWS();
+  const brand = brandsById[task.brandId];
+  const assignee = USER_BY_ID[task.assigneeId];
+  return (
+    <li>
+      <button type="button" onClick={() => openTask(task.id)} data-ops-task={task.id}
+        className="w-full text-left rounded-lg px-2.5 py-2 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300">
+        <span className="block cw-13 cw-clamp2"><strong className="font-semibold text-slate-900">{brand?.name}</strong><span className="text-slate-300 mx-1" aria-hidden="true">·</span><span className="text-slate-700">{task.title}</span></span>
+        <span className="mt-1 flex items-center gap-1.5 cw-11 text-slate-500 min-w-0">
+          <Avatar userId={task.assigneeId} size={16} />
+          <span className="truncate min-w-0" title={assignee?.name}>{assignee ? assignee.name.split(" ")[0] : "Atanmamış"}</span>
+          <span className="text-slate-300 shrink-0" aria-hidden="true">·</span><DeadlineLabel task={task} className="shrink-0" />
+          {showStatus && <><span className="flex-1" /><StatusPill status={task.status} small /></>}
+        </span>
+      </button>
+    </li>
+  );
+}
+
+/* Grubun adı durumu zaten söylüyorsa (onaylar, tamamlananlar, geciken) satırda ayrıca durum etiketi gösterilmez. */
+const STATUS_IMPLIED = new Set(["urgent", "manager", "client", "done"]);
+
+function OpsBox({ box, tasks }) {
+  const [Icon, tone, border, empty] = OPS_META[box.key];
+  const id = `ops-${box.key}`;
+  return (
+    <section data-ops-box={box.key} aria-labelledby={id} className={`flex flex-col h-[300px] bg-white border border-slate-200 border-t-4 ${border} rounded-xl overflow-hidden min-w-0`}>
+      <header className="shrink-0 flex items-center gap-2 px-3.5 h-11 border-b border-slate-100">
+        <Icon size={15} className={tone} aria-hidden="true" />
+        <h3 id={id} className="flex-1 min-w-0 cw-13 font-bold text-slate-900 truncate" title={box.title}>{box.title}</h3>
+        <span className={`h-5 min-w-5 px-1.5 rounded-full cw-11 font-bold tabular-nums flex items-center justify-center ${tasks.length ? "bg-slate-100 text-slate-700" : "bg-slate-50 text-slate-300"}`} data-ops-count={tasks.length}>{tasks.length}</span>
+      </header>
+      <div className="flex-1 min-h-0 overflow-y-auto cw-scroll p-1.5" tabIndex={0} role="region" aria-label={`${box.title} listesi`}>
+        {tasks.length
+          ? <ul className="space-y-0.5">{tasks.map((t) => <OpsBoxItem key={t.id} task={t} showStatus={!STATUS_IMPLIED.has(box.key)} />)}</ul>
+          : <p className="h-full flex items-center justify-center text-center cw-12 text-slate-400 px-4">{empty}</p>}
+      </div>
+    </section>
+  );
+}
+
+function OpsDesk({ tasks, open, onToggle }) {
+  const { brandsById } = useWS();
+  const now = useNow();
+  const { metrics, groups } = useMemo(() => {
+    const at = new Date(now);
+    const yesterday = addDays(TODAY, -1), weekAgo = addDays(TODAY, -7);
+    const out = Object.fromEntries(OPS_BOXES.map((b) => [b.key, []]));
+    const isAgency = (t) => isAgencyBrand(brandsById[t.brandId]);
+    tasks.forEach((t) => {
+      const key = opsBox(t, { now: at, isAgency });
+      // Tamamlananlar: yayına hazır (Onaylandı) her zaman; tamamlananlar yalnızca son 7 gün.
+      if (key === "done" && t.status === "Tamamlandı" && !((planDate(t) || "") >= weekAgo || String(t.updatedAt || "").slice(0, 10) >= weekAgo)) return;
+      out[key].push(t);
+    });
+    const byDue = (a, b) => `${a.dueDate || "9999"} ${a.dueTime || "99"}`.localeCompare(`${b.dueDate || "9999"} ${b.dueTime || "99"}`);
+    Object.entries(out).forEach(([k, list]) => list.sort(k === "done" ? (a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")) : byDue));
+    return { metrics: opsMetrics(tasks, { now: at, today: TODAY, yesterday }), groups: out };
+  }, [tasks, brandsById, now]);
+  const diff = metrics.today - metrics.yesterday;
+  const cards = [
+    { key: "today", label: "Bugünkü Teslimatlar", value: metrics.today, tone: "text-orange-600", border: "border-t-orange-500",
+      sub: diff === 0 ? "Dünle aynı" : `Dünden ${Math.abs(diff)} ${diff > 0 ? "fazla" : "az"}`, SubIcon: diff >= 0 ? ArrowUp : ArrowDown },
+    { key: "late", label: "Geciken İşler", value: metrics.late, tone: metrics.late ? "text-red-600" : "text-slate-900", border: "border-t-red-500",
+      sub: metrics.critical ? `${metrics.critical} kritik iş` : metrics.late ? "Kritik iş yok" : "Geciken iş yok", SubIcon: AlertTriangle, subTone: metrics.critical ? "text-red-600 font-semibold" : "" },
+    { key: "manager", label: "Yönetici Onayı", value: metrics.manager, tone: "text-slate-900", border: "border-t-violet-500", sub: "İncelenmeyi bekliyor", SubIcon: ShieldCheck },
+    { key: "client", label: "Müşteri Onayı", value: metrics.client, tone: "text-slate-900", border: "border-t-amber-500", sub: "Yanıt bekliyor", SubIcon: Briefcase },
+  ];
+  return (
+    <section aria-label="Genel bakış" data-ops-desk="">
+      <div className="flex items-center justify-between mb-2.5">
+        <h2 className="flex items-center gap-2 cw-13 font-semibold text-slate-900"><LayoutDashboard size={15} className="text-slate-400" />Genel Bakış</h2>
+        <button type="button" onClick={onToggle} className="inline-flex items-center gap-1 cw-12 font-medium text-slate-500 hover:text-slate-900" aria-expanded={open}>
+          {open ? "Gizle" : "Göster"}{open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
+      </div>
+      {open && (
+        <div className="space-y-4">
+          <div className="grid gap-3 grid-cols-2 xl:grid-cols-4">
+            {cards.map(({ key, label, value, tone, border, sub, SubIcon, subTone }) => (
+              <div key={key} data-ops-metric={key} className={`p-4 rounded-xl border border-slate-200 border-t-4 ${border} bg-white min-w-0`}>
+                <p className="cw-11 font-semibold uppercase tracking-wide text-slate-500 truncate">{label}</p>
+                <p className={`mt-1 text-3xl font-bold tracking-tight tabular-nums ${tone}`} data-ops-value={value}>{value}</p>
+                <p className={`mt-1 flex items-center gap-1 cw-12 text-slate-500 min-w-0 ${subTone || ""}`}><SubIcon size={12} className="shrink-0" aria-hidden="true" /><span className="truncate">{sub}</span></p>
+              </div>
+            ))}
+          </div>
+          <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4" data-ops-boxes="">
+            {OPS_BOXES.map((b) => <OpsBox key={b.key} box={b} tasks={groups[b.key]} />)}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ───────────────────────── Sosyal Medya Planı (Günlük / Haftalık / Aylık) ───────────────────────── */
+
+const PLAN_VIEWS = [["day", "Günlük", Calendar], ["week", "Haftalık", CalendarRange], ["month", "Aylık", CalendarDays]];
+const PLAN_VIEW_KEY = "cw:plan-view";
+const monthStart = (iso) => `${iso.slice(0, 7)}-01`;
+const shiftMonth = (iso, n) => { const d = parseISO(monthStart(iso)); d.setMonth(d.getMonth() + n); return toISO(d); };
+const weekStartOf = (iso) => addDays(iso, -((parseISO(iso).getDay() + 6) % 7));
+const fmtShort = (iso) => { const d = parseISO(iso); return `${d.getDate()} ${AYLAR[d.getMonth()].slice(0, 3)} ${d.getFullYear()}`; };
+const monthLabel = (iso) => { const d = parseISO(iso); return `${AYLAR[d.getMonth()]} ${d.getFullYear()}`; };
+/* Satır tonu (Google Docs planındaki renklendirme): gecikmiş açık iş kırmızı, diğerleri duruma göre. */
+const PLAN_ROW_TONE = {
+  "Başlanmadı": "border-l-slate-300 bg-white", "Çalışılıyor": "border-l-sky-500 bg-sky-50/50", "Yönetici Onayı": "border-l-violet-500 bg-violet-50/50",
+  "Müşteri Onayı": "border-l-amber-500 bg-amber-50/60", "Revizyon": "border-l-orange-500 bg-orange-50/50", "Onaylandı": "border-l-teal-500 bg-teal-50/50",
+  "Tamamlandı": "border-l-emerald-500 bg-emerald-50/50", "Gecikti": "border-l-red-500 bg-red-50/60",
+};
+const planRowTone = (task) => (deadlineInfo(task).state === "overdue" ? PLAN_ROW_TONE["Gecikti"] : PLAN_ROW_TONE[task.status] || PLAN_ROW_TONE["Başlanmadı"]);
+const planTitle = (task) => (norm(task.title).startsWith(norm(task.format)) ? task.title : `${task.format.toLocaleUpperCase("tr-TR")} · ${task.title}`);
+
+/* Üzerine gelince açılan küçük bilgi kartı (masaüstü); dokunmatikte / klavyede tıklayınca açılır. */
+function HoverInfo({ label, trigger, triggerClass = "", width = 280, children }) {
+  const [anchor, setAnchor] = useState(null);
+  const [mode, setMode] = useState(null);
+  const timer = useRef(null);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const keep = () => clearTimeout(timer.current);
+  const close = useCallback(() => { clearTimeout(timer.current); setMode(null); }, []);
+  const hoverOut = () => { keep(); timer.current = setTimeout(() => setMode((m) => (m === "hover" ? null : m)), 180); };
+  return (
+    <>
+      <button type="button" ref={setAnchor} aria-label={label} aria-haspopup="dialog" aria-expanded={mode !== null}
+        onPointerEnter={(e) => { if (e.pointerType === "mouse") { keep(); setMode((m) => m || "hover"); } }}
+        onPointerLeave={(e) => { if (e.pointerType === "mouse") hoverOut(); }}
+        onClick={(e) => { e.stopPropagation(); setMode((m) => (m === "pinned" ? null : "pinned")); }}
+        className={`inline-flex items-center rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300 ${triggerClass}`}>
+        {trigger}
+      </button>
+      <Floating anchorEl={anchor} open={mode !== null} onClose={close} width={width} placement="top-start" onMouseEnter={keep} onMouseLeave={() => { if (mode === "hover") hoverOut(); }} label={label}>
+        <div onClick={(e) => e.stopPropagation()}>{children}</div>
+      </Floating>
+    </>
+  );
+}
+
+function CommentPreview({ task }) {
+  const { state, openTask, commentCount } = useWS();
+  const count = commentCount[task.id] || 0;
+  const latest = useMemo(() => state.comments.filter((c) => c.taskId === task.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 2), [state.comments, task.id]);
+  if (!count) return <span className="inline-flex items-center gap-0.5 cw-11 text-slate-300 tabular-nums" aria-label="Yorum yok"><MessageSquare size={13} aria-hidden="true" />0</span>;
+  return (
+    <HoverInfo label={`${count} yorum`} width={300} triggerClass="gap-0.5 h-6 px-1 cw-11 font-medium tabular-nums text-slate-500 hover:text-orange-600 hover:bg-orange-50"
+      trigger={<><MessageSquare size={13} aria-hidden="true" />{count}</>}>
+      <p className="px-3 pt-2.5 pb-1 cw-11 font-semibold uppercase tracking-wide text-slate-400">Yorumlar</p>
+      <ul className="px-3 pb-1 space-y-2.5">
+        {latest.map((c) => (
+          <li key={c.id} className="flex items-start gap-2">
+            <Avatar userId={c.userId} size={24} />
+            <span className="min-w-0">
+              <span className="flex items-baseline gap-1.5"><span className="cw-12 font-semibold text-slate-900 truncate">{USER_BY_ID[c.userId]?.name.split(" ")[0] || "Kullanıcı"}</span><span className="cw-10 text-slate-400 shrink-0">{fmtDateTime(c.createdAt)}</span></span>
+              <span className="block cw-12 text-slate-600 cw-clamp2">{c.text}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      <button type="button" onClick={() => openTask(task.id, "comments")} className="w-full text-left px-3 py-2 mt-1 border-t border-slate-100 cw-12 font-semibold text-orange-600 hover:bg-orange-50 rounded-b-xl inline-flex items-center gap-1">
+        Tüm yorumları gör ({count})<ChevronRight size={13} aria-hidden="true" />
+      </button>
+    </HoverInfo>
+  );
+}
+
+function AssigneeHover({ userId }) {
+  const u = USER_BY_ID[userId];
+  if (!u) return <Avatar userId={null} size={26} />;
+  return (
+    <HoverInfo label={`Sorumlu: ${u.name}`} width={240} triggerClass="rounded-full" trigger={<Avatar userId={userId} size={26} />}>
+      <div className="flex items-center gap-2.5 p-3">
+        <Avatar userId={userId} size={36} />
+        <span className="min-w-0">
+          <span className="block cw-11 font-semibold uppercase tracking-wide text-slate-400">Sorumlu kişi</span>
+          <span className="block cw-13 font-semibold text-slate-900 truncate">{u.name}</span>
+          <span className="block cw-11 text-slate-500 truncate">{u.email || userTitle(u)}</span>
+        </span>
+      </div>
+    </HoverInfo>
+  );
+}
+
+/* Aylık plan satırı: tarih · gün · format/başlık · ekler · yorumlar · sorumlu · durum. */
+function PlanRow({ task }) {
+  const { openTask, attachmentsByTask, updateTask, statusOptions } = useWS();
+  const iso = planDate(task);
+  const d = parseISO(iso);
+  const late = deadlineInfo(task).state === "overdue";
+  return (
+    <div role="row" onClick={() => openTask(task.id)} data-plan-row={task.id}
+      className={`cw-plan-row group border border-slate-200 border-l-4 rounded-lg cursor-pointer hover:shadow-sm transition ${planRowTone(task)}`}>
+      <span role="cell" className={`cw-plan-date cw-12 font-medium tabular-nums ${late ? "text-red-600" : "text-slate-700"}`}>{fmtShort(iso)}</span>
+      <span role="cell" className={`cw-plan-day cw-12 ${late ? "text-red-600" : "text-slate-500"}`}>{GUNLER[d.getDay()]}</span>
+      <button role="cell" type="button" onClick={(e) => { e.stopPropagation(); openTask(task.id); }} title={`${task.title} · ${task.platform} · ${task.format}`}
+        className={`cw-plan-title min-w-0 text-left cw-13 font-semibold truncate rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300 ${task.status === "Tamamlandı" ? "text-slate-500" : "text-slate-900"}`}>
+        {planTitle(task)}
+      </button>
+      <span role="cell" className="cw-plan-meta inline-flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+        <AttachmentIndicator attachments={attachmentsByTask[task.id] || EMPTY} showEmpty />
+        <CommentPreview task={task} />
+        <AssigneeHover userId={task.assigneeId} />
+      </span>
+      <span role="cell" className="cw-plan-status justify-self-end" onClick={(e) => e.stopPropagation()}>
+        <StatusMenu value={task.status} small options={statusOptions(task)} onChange={(s) => updateTask(task.id, { status: s }, `Durum “${s}” olarak güncellendi.`)} />
+      </span>
+    </div>
+  );
+}
+
+function MonthPlan({ brands, tasks, month, brandId, onSelectBrand }) {
+  const { openNewTask, can: allowed } = useWS();
+  const inMonth = useMemo(() => tasks.filter((t) => (planDate(t) || "").startsWith(month.slice(0, 7))), [tasks, month]);
+  const countBy = useMemo(() => { const m = {}; inMonth.forEach((t) => { m[t.brandId] = (m[t.brandId] || 0) + 1; }); return m; }, [inMonth]);
+  const active = brands.find((b) => b.id === brandId) || brands.find((b) => countBy[b.id]) || brands[0];
+  const [collapsed, setCollapsed] = useState(() => new Set());
+  const weeks = useMemo(() => {
+    const m = new Map();
+    inMonth.filter((t) => active && t.brandId === active.id)
+      .sort((a, b) => `${planDate(a)} ${a.dueTime || "99"} ${a.title}`.localeCompare(`${planDate(b)} ${b.dueTime || "99"} ${b.title}`))
+      .forEach((t) => { const w = weekOfMonth(planDate(t)); if (!m.has(w)) m.set(w, []); m.get(w).push(t); });
+    return [...m.entries()].sort((a, b) => a[0] - b[0]);
+  }, [inMonth, active]);
+  if (!active) return <EmptyBlock icon={CalendarDays} title="Henüz marka yok" text="Plan oluşturmak için önce bir marka ekleyin." />;
+  const toggle = (w) => setCollapsed((s) => { const n = new Set(s); n.has(w) ? n.delete(w) : n.add(w); return n; });
+  return (
+    <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]" data-month-plan="">
+      <nav aria-label="Marka planları" className="hidden lg:block">
+        <p className="px-2 mb-1.5 cw-11 font-semibold uppercase tracking-wide text-slate-400">Marka planları</p>
+        <ul className="space-y-0.5">
+          {brands.map((b) => {
+            const on = b.id === active.id;
+            return (
+              <li key={b.id}>
+                <button type="button" onClick={() => onSelectBrand(b.id)} aria-current={on ? "true" : undefined} data-plan-brand={b.id}
+                  className={`w-full flex items-center gap-2 h-9 px-2 rounded-lg cw-13 text-left transition ${on ? "bg-orange-50 text-orange-700 font-semibold" : "text-slate-600 hover:bg-slate-100"}`}>
+                  <FileText size={14} className={on ? "text-orange-600" : "text-slate-400"} aria-hidden="true" />
+                  <span className="flex-1 min-w-0 truncate">{b.name}</span>
+                  {countBy[b.id] ? <span className="cw-10 font-semibold tabular-nums text-slate-400">{countBy[b.id]}</span> : null}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
+      <div className="min-w-0 bg-white border border-slate-200 rounded-xl p-4 sm:p-5">
+        <div className="flex flex-wrap items-center gap-2 justify-between mb-3">
+          <label className="lg:hidden w-full">
+            <span className="sr-only">Marka</span>
+            <select value={active.id} onChange={(e) => onSelectBrand(e.target.value)} className="w-full h-9 rounded-lg border border-slate-200 bg-white px-2 cw-13 font-medium text-slate-700">
+              {brands.map((b) => <option key={b.id} value={b.id}>{b.name}{countBy[b.id] ? ` (${countBy[b.id]})` : ""}</option>)}
+            </select>
+          </label>
+          <h2 className="text-lg font-bold tracking-tight text-slate-900 min-w-0" data-plan-heading="">{active.name.toLocaleUpperCase("tr-TR")} {AYLAR[parseISO(month).getMonth()]} Sosyal Medya</h2>
+          {allowed("canCreateTasks") && <Btn size="sm" variant="secondary" onClick={() => openNewTask(active.id)}><Plus size={14} />İçerik Ekle</Btn>}
+        </div>
+        {weeks.length === 0 ? (
+          <p className="py-10 text-center cw-13 text-slate-500" data-plan-empty="">{monthLabel(month)} için {active.name} planında içerik yok.</p>
+        ) : (
+          <div className="cw-plan-list space-y-4" role="table" aria-label={`${active.name} ${monthLabel(month)} planı`}>
+            {weeks.map(([w, list]) => {
+              const open = !collapsed.has(w);
+              return (
+                <section key={w} data-plan-week={w} role="rowgroup">
+                  <button type="button" onClick={() => toggle(w)} aria-expanded={open} className="flex items-center gap-1.5 mb-2 cw-14 font-bold text-slate-900 hover:text-orange-700">
+                    <ChevronDown size={16} className={`transition-transform ${open ? "" : "-rotate-90"}`} aria-hidden="true" />{w}. Hafta
+                    <span className="cw-11 font-medium text-slate-400 ml-1">{list.length} içerik</span>
+                  </button>
+                  {open && <div className="space-y-1.5">{list.map((t) => <PlanRow key={t.id} task={t} />)}</div>}
+                </section>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* Günlük / haftalık görünümde bir markanın o günkü içerikleri. */
+function PlanBrandCard({ brand, tasks }) {
+  const { openTask } = useWS();
+  const color = BRAND_COLORS[brand.color] || BRAND_COLORS.orange;
+  return (
+    <article data-plan-card={brand.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden min-w-0 flex flex-col">
+      <span className={`h-1 ${color.bar}`} aria-hidden="true" />
+      <header className="flex items-center gap-2.5 px-3.5 pt-3 pb-2">
+        <BrandLogo brand={brand} size={30} />
+        <h3 className="flex-1 min-w-0 cw-13 font-bold text-slate-900 truncate" title={brand.name}>{brand.name}</h3>
+        <span className="h-5 px-2 rounded-full bg-slate-100 cw-11 font-semibold text-slate-600 whitespace-nowrap">{tasks.length} görev</span>
+      </header>
+      <ul className="px-1.5 pb-1.5 divide-y divide-slate-100">
+        {tasks.map((t) => {
+          const assignee = USER_BY_ID[t.assigneeId];
+          return (
+            <li key={t.id}>
+              <button type="button" onClick={() => openTask(t.id)} data-plan-card-task={t.id} className="w-full text-left px-2 py-2 rounded-lg hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300">
+                <span className="flex items-center gap-2">
+                  <span className="flex-1 inline-flex items-center gap-1 cw-11 text-slate-500"><Calendar size={11} aria-hidden="true" />{fmtShort(planDate(t))}</span>
+                  <StatusPill status={t.status} small />
+                </span>
+                <span className="block mt-1 cw-13 font-semibold text-slate-900 cw-clamp2">{planTitle(t)}</span>
+                <span className="mt-1 flex items-center gap-1.5 cw-11 text-slate-500 min-w-0">
+                  <Avatar userId={t.assigneeId} size={18} /><span className="truncate">{assignee ? shortName(assignee.name) : "Atanmamış"}</span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </article>
+  );
+}
+
+function PlanDay({ iso, brands, tasks, compact }) {
+  const groups = useMemo(() => brands.map((b) => ({ brand: b, tasks: tasks.filter((t) => t.brandId === b.id && planDate(t) === iso) })).filter((g) => g.tasks.length), [brands, tasks, iso]);
+  const [open, setOpen] = useState(true);
+  const total = groups.reduce((n, g) => n + g.tasks.length, 0);
+  const isToday = iso === TODAY;
+  if (!compact && !total) return <EmptyBlock icon={CalendarDays} title={`${fmtDateDay(iso)} için planlanmış içerik yok`} text="Başka bir güne geçebilir veya yeni içerik ekleyebilirsiniz." />;
+  return (
+    <section data-plan-day={iso} aria-label={fmtDateDay(iso)}>
+      {compact && (
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} disabled={!total} className="flex items-center gap-2 mb-2.5 text-left disabled:cursor-default">
+          <ChevronDown size={16} className={`text-slate-400 transition-transform ${open && total ? "" : "-rotate-90"}`} aria-hidden="true" />
+          <span className={`cw-14 font-bold ${total ? "text-slate-900" : "text-slate-400"}`}>{fmtDateLong(iso)}</span>
+          <span className="cw-12 text-slate-400">{GUNLER[parseISO(iso).getDay()]}</span>
+          {isToday && <span className="h-5 px-1.5 rounded-md bg-orange-100 text-orange-700 cw-10 font-semibold flex items-center">Bugün</span>}
+          <span className="cw-11 text-slate-400">{total ? `${total} içerik` : "İçerik yok"}</span>
+        </button>
+      )}
+      {(!compact || (open && total > 0)) && (
+        <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 items-start">
+          {groups.map((g) => <PlanBrandCard key={g.brand.id} brand={g.brand} tasks={g.tasks} />)}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SocialPlanPage({ search, brandId }) {
+  const { state, brandsById, openNewTask, can: allowed } = useWS();
+  useNow();
+  const [view, setViewState] = useState(() => { try { return window.localStorage.getItem(PLAN_VIEW_KEY) || "month"; } catch { return "month"; } });
+  const setView = (v) => { setViewState(v); try { window.localStorage.setItem(PLAN_VIEW_KEY, v); } catch { /* depolama kapalı */ } };
+  const [cursor, setCursor] = useState(TODAY);
+  // Aylık planda seçilen marka yalnızca planı değiştirir; kenar çubuğundaki marka seçimi (günlük/haftalık süzgeç) etkilenmez.
+  const [planBrand, setPlanBrand] = useState(brandId !== "all" ? brandId : null);
+  useEffect(() => { if (brandId !== "all") setPlanBrand(brandId); }, [brandId]);
+  const q = norm(search);
+  const tasks = useMemo(() => state.tasks.filter((t) => planDate(t) && matchesSearch(q, t.title, brandsById[t.brandId]?.name, t.platform, t.format)), [state.tasks, q, brandsById]);
+  const brands = state.brands;
+  const visibleBrands = view === "month" || brandId === "all" ? brands : brands.filter((b) => b.id === brandId);
+  const step = (n) => setCursor((c) => (view === "day" ? addDays(c, n) : view === "week" ? addDays(c, 7 * n) : shiftMonth(c, n)));
+  const ws = weekStartOf(cursor);
+  const heading = view === "day" ? fmtDateLong(cursor) : view === "week" ? `${fmtDate(ws)} – ${fmtDateLong(addDays(ws, 6))}` : monthLabel(cursor);
+  const sub = view === "day" ? GUNLER[parseISO(cursor).getDay()] : view === "week" ? "Haftalık plan" : "Aylık içerik planı";
+  const unplanned = state.tasks.filter((t) => !planDate(t)).length;
+  return (
+    <div className="space-y-4" data-social-plan={view}>
+      <div className="flex flex-wrap items-center gap-2 justify-between bg-white border border-slate-200 rounded-xl p-2.5">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Btn size="sm" variant="secondary" onClick={() => setCursor(TODAY)}><Calendar size={14} />Bugün</Btn>
+          <button type="button" onClick={() => step(-1)} className="h-8 w-8 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100" aria-label="Önceki"><ChevronLeft size={16} /></button>
+          <button type="button" onClick={() => step(1)} className="h-8 w-8 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100" aria-label="Sonraki"><ChevronRight size={16} /></button>
+          <div className="min-w-0 ml-1">
+            <h2 className="cw-15 font-bold text-slate-900 leading-tight truncate" data-plan-title="">{heading}</h2>
+            <p className="cw-11 text-slate-500 leading-tight">{sub}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex p-1 gap-0.5 rounded-lg bg-slate-100" role="tablist" aria-label="Plan görünümü">
+            {PLAN_VIEWS.map(([key, label, Icon]) => (
+              <button key={key} type="button" role="tab" aria-selected={view === key} onClick={() => setView(key)} data-plan-view={key}
+                className={`h-8 px-2.5 inline-flex items-center gap-1.5 rounded-md cw-12 whitespace-nowrap transition ${view === key ? "bg-white text-orange-700 font-semibold shadow-sm border border-slate-200" : "text-slate-500 hover:text-slate-900 font-medium border border-transparent"}`}>
+                <Icon size={14} />{label}
+              </button>
+            ))}
+          </div>
+          {allowed("canCreateTasks") && <Btn size="sm" variant="primary" onClick={() => openNewTask(brandId !== "all" ? brandId : undefined)}><Plus size={14} /><span className="hidden sm:inline">Yeni Görev</span></Btn>}
+        </div>
+      </div>
+      {view === "month" && <MonthPlan brands={brands} tasks={tasks} month={monthStart(cursor)} brandId={planBrand} onSelectBrand={setPlanBrand} />}
+      {view === "day" && <PlanDay iso={cursor} brands={visibleBrands} tasks={tasks} />}
+      {view === "week" && (
+        <div className="space-y-5">
+          {Array.from({ length: 7 }, (_, i) => addDays(ws, i)).map((iso) => <PlanDay key={iso} iso={iso} brands={visibleBrands} tasks={tasks} compact />)}
+        </div>
+      )}
+      {unplanned > 0 && <p className="cw-11 text-slate-400">{unplanned} görevin yayın veya teslim tarihi olmadığı için planda gösterilmiyor; tarih ekleyince burada görünür.</p>}
+    </div>
+  );
+}
+
 /* ───────────────────────── Admin: Onay Süreçleri ───────────────────────── */
 
 const APPROVAL_STAGES = [
@@ -6644,6 +7059,7 @@ const NAV_BY_ROLE = {
     { key: "overview", label: "Genel Bakış", Icon: LayoutDashboard },
     { key: "today", label: "Günlük Operasyon Akışı", Icon: Calendar },
     { key: "plan", label: "İçerik Planlayıcı", Icon: Table },
+    { key: "social", label: "Sosyal Medya Planı", Icon: CalendarDays },
     { key: "kit", label: "Marka Kılavuzu", Icon: BookOpen },
     { key: "files", label: "Marka Dosyaları & Varlıklar", Icon: FolderOpen, perm: "canViewBrandFiles" },
     { key: "approvals", label: "Onay Süreçleri", Icon: CheckCircle2, perm: "canAccessApprovals" },
@@ -6672,11 +7088,11 @@ const NAV_BY_ROLE = {
 const OPS_KEYS = new Set(["overview", "today", "plan", "kit", "files", "filters"]);
 const DEFAULT_PAGE = { admin: "ops", employee: "my", client: "client-home" };
 const PAGE_TITLES = {
-  my: "Bugünkü İşlerim", approvals: "Onay Süreçleri", team: "Ekip & Marka Yönetimi", users: "Kullanıcılar & Yetkiler",
+  my: "Bugünkü İşlerim", social: "Sosyal Medya Planı", approvals: "Onay Süreçleri", team: "Ekip & Marka Yönetimi", users: "Kullanıcılar & Yetkiler",
   notifications: "Bildirimler", "client-home": "Genel Bakış", content: "İçeriklerim", pending: "Onay Bekleyen İçerikler", "client-files": "Marka Dosyaları", "client-kit": "Marka Kılavuzu", "client-history": "Onay Geçmişi",
 };
 const SEARCH_PLACEHOLDERS = {
-  ops: "Görev, marka veya kişi ara…", my: "İşlerimde ara…", approvals: "Onay sürecindeki içeriklerde ara…", team: "Marka, çalışan veya müşteri ara…",
+  ops: "Görev, marka veya kişi ara…", my: "İşlerimde ara…", social: "Plandaki içeriklerde ara…", approvals: "Onay sürecindeki içeriklerde ara…", team: "Marka, çalışan veya müşteri ara…",
   users: "Kullanıcı veya e-posta ara…", notifications: "Bildirimlerde ara…", "client-home": "İçeriklerimde ara…", content: "İçeriklerimde ara…", pending: "Onay bekleyenlerde ara…", "client-files": "Görev, marka veya kişi ara…", "client-kit": "İçeriklerimde ara…", "client-history": "Onay geçmişinde ara…",
 };
 
@@ -6936,7 +7352,9 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
   if (currentPage === "ops") {
     pageNode = (
       <>
-        <Overview tasks={scopedTasks} open={overviewOpen} onToggle={() => setOverviewOpen((o) => !o)} filters={filters} onApply={(k, v) => { setFilter(k, v); if (tab === "files") setTab("feed"); }} />
+        {role === "admin"
+          ? <OpsDesk tasks={scopedTasks} open={overviewOpen} onToggle={() => setOverviewOpen((o) => !o)} />
+          : <Overview tasks={scopedTasks} open={overviewOpen} onToggle={() => setOverviewOpen((o) => !o)} filters={filters} onApply={(k, v) => { setFilter(k, v); if (tab === "files") setTab("feed"); }} />}
         <section ref={workspaceRef} className="space-y-4" aria-label="Çalışma alanı">
           <WorkspaceTabs tabs={tabs} tab={tab} setTab={setTab} sort={sort} setSort={setSort} counts={{ feed: filteredTasks.length, table: filteredTasks.length, files: scopedAssets }} />
           {tab === "feed" && <DailyFeed brands={visibleBrands} tasks={filteredTasks} hasActiveFilters={activeCount > 0} onClear={clearFilters} onFocusBrand={focusBrand} />}
@@ -6947,6 +7365,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
       </>
     );
   } else if (currentPage === "my") pageNode = <EmployeeDashboard search={filters.search} brandId={selectedBrandId} onAllNotifications={() => setPage("notifications")} />;
+  else if (currentPage === "social") pageNode = <SocialPlanPage search={filters.search} brandId={selectedBrandId} />;
   else if (currentPage === "approvals") pageNode = <ApprovalsPage search={filters.search} brandId={selectedBrandId} />;
   else if (currentPage === "team") {
     pageNode = (

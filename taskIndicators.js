@@ -142,3 +142,60 @@ export function employeeBox(task, now = new Date(), timeZone = TIMEZONE) {
   if (SOCIAL_FORMATS.has(task.format)) return "active";
   return "other";
 }
+
+/* ───────────── Yönetici operasyon masası (4 sayaç + 8 grup) ───────────── */
+
+export const OPS_BOXES = [
+  { key: "urgent", title: "Geciken & Acil İşler" },
+  { key: "manager", title: "Yönetici Onayı" },
+  { key: "client", title: "Müşteri Onayı" },
+  { key: "active", title: "Aktif Çalışmalar" },
+  { key: "done", title: "Tamamlanan & Yayına Hazır" },
+  { key: "web", title: "Web & Teknik" },
+  { key: "agency", title: "Ajans İçi İşler" },
+  { key: "ads", title: "Reklam İşleri" },
+];
+
+/* Acil: gecikmiş / "Gecikti" ya da yüksek öncelikli ve teslimi bugün (yakın). */
+export function isUrgent(task, now = new Date(), timeZone = TIMEZONE) {
+  if (DELIVERED_STATUSES.has(task.status)) return false;
+  const state = deadlineInfo(task, now, timeZone).state;
+  return task.status === "Gecikti" || state === "overdue" || (task.priority === "Yüksek" && state === "soon");
+}
+
+/* Öncelik: teslim edilmiş → onay aşamaları → geciken/acil → iş türü (web / ajans içi / reklam) → aktif çalışma. */
+export function opsBox(task, { now = new Date(), timeZone = TIMEZONE, isAgency = () => false } = {}) {
+  if (DELIVERED_STATUSES.has(task.status)) return "done";
+  if (task.status === "Yönetici Onayı") return "manager";
+  if (task.status === "Müşteri Onayı") return "client";
+  if (isUrgent(task, now, timeZone)) return "urgent";
+  if (task.format === "Web" || task.platform === "Web Sitesi") return "web";
+  if (isAgency(task)) return "agency";
+  if (task.format === "Reklam" || AD_PLATFORMS.has(task.platform)) return "ads";
+  return "active";
+}
+
+/* Üst sayaçlar. today / yesterday: "YYYY-MM-DD" (İstanbul). */
+export function opsMetrics(tasks, { now = new Date(), timeZone = TIMEZONE, today, yesterday }) {
+  const late = tasks.filter((t) => !DELIVERED_STATUSES.has(t.status) && (t.status === "Gecikti" || deadlineInfo(t, now, timeZone).state === "overdue"));
+  return {
+    today: tasks.filter((t) => t.dueDate === today).length,
+    yesterday: tasks.filter((t) => t.dueDate === yesterday).length,
+    late: late.length,
+    critical: late.filter((t) => t.priority === "Yüksek").length,
+    manager: tasks.filter((t) => t.status === "Yönetici Onayı").length,
+    client: tasks.filter((t) => t.status === "Müşteri Onayı").length,
+  };
+}
+
+/* ───────────── Sosyal medya planı (Google Docs düzeni) ───────────── */
+
+/* Planın tarihi: yayın tarihi, yoksa teslim tarihi. */
+export const planDate = (task) => task.publishDate || task.dueDate || null;
+
+/* Ay içindeki hafta numarası ("1. Hafta"): haftalar pazartesi başlar, ayın 1'ini içeren hafta 1. haftadır. */
+export function weekOfMonth(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const offset = (new Date(y, m - 1, 1).getDay() + 6) % 7;
+  return Math.floor((d - 1 + offset) / 7) + 1;
+}

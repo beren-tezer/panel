@@ -53,15 +53,16 @@ export function resolveRoute({ path, search = "", phase, role }) {
 
 const EVENT = "cw:navigate";
 const keepQuery = () => {
-  // Geliştirme demosu (?demo) yönlendirmelerde korunur; diğer sorgu parametreleri taşınmaz.
+  // Geliştirme demoları (?demo, ?authdemo) yönlendirmelerde korunur; diğer sorgu parametreleri taşınmaz.
   if (typeof window === "undefined") return "";
-  return new URLSearchParams(window.location.search).has("demo") ? "?demo" : "";
+  const q = new URLSearchParams(window.location.search);
+  return q.has("demo") ? "?demo" : q.has("authdemo") ? "?authdemo" : "";
 };
 
 export function navigate(to, { replace = false } = {}) {
   if (typeof window === "undefined") return;
   const [p, q] = String(to).split("?");
-  const query = q ? `?${q}${keepQuery() ? "&demo" : ""}` : keepQuery();
+  const query = q ? `?${q}${keepQuery() ? `&${keepQuery().slice(1)}` : ""}` : keepQuery();
   const url = `${p}${query}`;
   if (`${window.location.pathname}${window.location.search}` === url) return;
   window.history[replace ? "replaceState" : "pushState"](null, "", url);

@@ -656,6 +656,14 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
     },
 
     auth: {
+      signInWithPassword: async (email, password) => {
+        const { error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
+        if (!error) return;
+        if (/not confirmed/i.test(error.message)) throw new Error("Hesabınız henüz onaylanmadı. Ajans yöneticinizle iletişime geçin.");
+        if (error.status === 400 || /invalid login credentials/i.test(error.message)) throw new Error("E-posta veya şifre hatalı.");
+        if (error.status === 429 || /rate limit|too many/i.test(error.message)) throw new Error("Çok fazla deneme yapıldı. Birkaç dakika sonra tekrar deneyin.");
+        throw new Error("Giriş yapılamadı. Bağlantınızı kontrol edip tekrar deneyin.");
+      },
       // redirectPath: giriş bağlantısının döneceği iç adres (router.safeNext ile doğrulanmış; ör. /onay/<marka>).
       sendLink: async (email, redirectPath = "/") => {
         const { error } = await supabase.auth.signInWithOtp({

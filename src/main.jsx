@@ -1,6 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import App from "../AgencyWorkspace.jsx";
+import App, { demoSource } from "../AgencyWorkspace.jsx";
 import { createSupabaseSource } from "../workspaceData.js";
 import { supabase, supabaseConfig, supabaseConfigError } from "./supabase.js";
 import "./index.css";
@@ -11,7 +11,14 @@ const root = createRoot(document.getElementById("root"));
 // Üretim derlemesinde bu seçenek yoktur; panel her zaman Supabase ile açılır.
 const demo = import.meta.env.DEV && new URLSearchParams(window.location.search).has("demo");
 
-if (demo) {
+// Yalnızca geliştirme: ?authdemo → demo verisi + bellek içi oturum (giriş / çıkış / yönlendirme testleri). Üretimde yoktur.
+const authDemo = import.meta.env.DEV && new URLSearchParams(window.location.search).has("authdemo");
+
+if (authDemo) {
+  import("../devAuthSource.js").then(({ createAuthDemoSource }) => {
+    root.render(<React.StrictMode><App source={createAuthDemoSource(demoSource)} /></React.StrictMode>);
+  });
+} else if (demo) {
   root.render(<React.StrictMode><App /></React.StrictMode>);
 } else if (supabaseConfigError) {
   root.render(<p style={{ fontFamily: "system-ui", padding: 24, color: "#b91c1c" }}>{supabaseConfigError}</p>);

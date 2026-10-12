@@ -29,7 +29,7 @@ import {
 } from "./rbac.js";
 import {
   Activity, AlertTriangle, Archive, ArrowDown, ArrowUp, Bold, BookOpen, Calendar, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp,
-  Circle, ClipboardCheck, Globe, Megaphone, ClipboardList, Clock, Copy, Download, ExternalLink, Eye, File as FileIcon, FileImage, FileText, Film, Flag, Folder, FolderOpen, HardDrive, Heading, History, ListChecks,
+  Circle, ClipboardCheck, EyeOff, Globe, Megaphone, ClipboardList, Clock, Copy, Download, ExternalLink, Eye, File as FileIcon, FileImage, FileText, Film, Flag, Folder, FolderOpen, HardDrive, Heading, History, ListChecks,
   Image as ImageIcon, Inbox, Italic, Layers, LayoutDashboard, LayoutGrid, Link as LinkIcon, List, ListOrdered, Lock, LogOut, Menu, MessageSquare,
   MoreHorizontal, Palette, Paperclip, PenTool, Pencil, Pilcrow, Plus, RefreshCw, RotateCcw, Search, Send, ShieldCheck, SlidersHorizontal, Sparkles, Star, Table, Trash2, Type, Unlink, Bell, Briefcase, UserPlus,
   Upload, User, Users, X,
@@ -7077,7 +7077,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
 
 /* ───────────────────────── Veri kaynağı & oturum ───────────────────────── */
 
-const demoSource = createMemorySource(createDemoState, { checklist: createMemoryChecklist(DEMO_CHECKLIST_TEMPLATES), content: createMemoryContent() });
+export const demoSource = createMemorySource(createDemoState, { checklist: createMemoryChecklist(DEMO_CHECKLIST_TEMPLATES), content: createMemoryContent() });
 demoSource.brandKit = createMemoryBrandKit(DEMO_BRAND_KITS);
 
 /* Reducer'ı yerel önbellek olarak çalıştırır (iyimser güncelleme) ve her işlemi kaynağa yazar.
@@ -7205,39 +7205,71 @@ function FullScreenMessage({ children }) {
   );
 }
 
+/* Giriş: e-posta + şifre (kullanıcılar Supabase panelinde şifreyle oluşturulur). Şifresi olmayan hesaplar için
+   e-postayla giriş bağlantısı ikinci seçenek olarak kalır. Başarılı girişte oturum değişikliği uygulamayı yükler;
+   rol ve yönlendirme sunucudaki profilden belirlenir. */
 function LoginScreen({ auth }) {
+  const [mode, setMode] = useState("password"); // password | link
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [show, setShow] = useState(false);
   const [status, setStatus] = useState({ name: "idle" });
-  // Giriş bağlantısı kullanıcıyı gitmek istediği sayfaya (ör. /onay/<marka>) geri getirir; yalnızca güvenli iç adresler.
+  // Kullanıcı gitmek istediği sayfaya (ör. /onay/<marka>) geri döner; yalnızca güvenli iç adresler (router.safeNext).
   const next = typeof window === "undefined" ? null : safeNext(new URLSearchParams(window.location.search).get("next"));
+  const clearError = () => { if (status.name === "error") setStatus({ name: "idle" }); };
   const submit = async (e) => {
     e.preventDefault();
-    if (!/^\S+@\S+\.\S+$/.test(email.trim())) { setStatus({ name: "error", message: "Geçerli bir e-posta adresi girin." }); return; }
+    if (!/^\S+@\S+\.\S+$/.test(email.trim())) { setStatus({ name: "error", field: "email", message: "Geçerli bir e-posta adresi girin." }); return; }
+    if (mode === "password" && !password) { setStatus({ name: "error", field: "password", message: "Şifrenizi girin." }); return; }
     setStatus({ name: "sending" });
-    try { await auth.sendLink(email, next || "/"); setStatus({ name: "sent" }); }
-    catch (err) { setStatus({ name: "error", message: err?.message || "Bağlantı gönderilemedi." }); }
+    try {
+      if (mode === "password") { await auth.signInWithPassword(email, password); setStatus({ name: "signing-in" }); }
+      else { await auth.sendLink(email, next || "/"); setStatus({ name: "sent" }); }
+    } catch (err) {
+      setStatus({ name: "error", field: mode === "password" ? "password" : "email", message: err?.message || "Giriş yapılamadı." });
+    }
   };
+  const busy = status.name === "sending" || status.name === "signing-in";
   return (
     <FullScreenMessage>
       <div className="flex items-center gap-2.5 mb-5">
         <span className="h-9 w-9 rounded-xl bg-orange-500 text-white flex items-center justify-center"><Layers size={18} /></span>
-        <div><p className="cw-13 font-semibold text-slate-900">AgencyOS</p><p className="cw-12 text-slate-400">Ekip girişi</p></div>
+        <div><p className="cw-13 font-semibold text-slate-900">AgencyOS</p><p className="cw-12 text-slate-400">Giriş</p></div>
       </div>
       {status.name === "sent" ? (
         <div role="status" className="cw-13 text-slate-700">
           <p className="font-semibold text-slate-900 mb-1">E-postanızı kontrol edin</p>
           <p><strong>{email.trim()}</strong> adresine bir giriş bağlantısı gönderdik. Bağlantıya tıkladığınızda panel açılır.</p>
-          <button type="button" onClick={() => setStatus({ name: "idle" })} className="mt-4 cw-12 font-semibold text-orange-600 hover:text-orange-700">Farklı bir adres kullan</button>
+          <button type="button" onClick={() => { setMode("password"); setStatus({ name: "idle" }); }} className="mt-4 cw-12 font-semibold text-orange-600 hover:text-orange-700">Şifreyle giriş yap</button>
         </div>
       ) : (
-        <form onSubmit={submit} noValidate className="space-y-3">
-          <Field label="E-posta" error={status.name === "error" ? status.message : ""}>
-            <input type="email" autoFocus autoComplete="email" value={email} onChange={(e) => { setEmail(e.target.value); if (status.name === "error") setStatus({ name: "idle" }); }} placeholder="ad@example.com" aria-label="E-posta" className={inputCls(status.name === "error")} />
+        <form onSubmit={submit} noValidate className="space-y-3" data-login-mode={mode}>
+          <Field label="E-posta" error={status.name === "error" && status.field === "email" ? status.message : ""}>
+            <input type="email" autoFocus autoComplete="username" value={email} onChange={(e) => { setEmail(e.target.value); clearError(); }} placeholder="ad@sirket.com" aria-label="E-posta" className={inputCls(status.name === "error" && status.field === "email")} />
           </Field>
-          <Btn variant="primary" type="submit" className="w-full justify-center" disabled={status.name === "sending"}>
-            {status.name === "sending" ? "Gönderiliyor…" : "Giriş bağlantısı gönder"}
+          {mode === "password" && (
+            <Field label="Şifre" error={status.name === "error" && status.field === "password" ? status.message : ""} group>
+              <div className="relative">
+                <input type={show ? "text" : "password"} autoComplete="current-password" value={password} onChange={(e) => { setPassword(e.target.value); clearError(); }}
+                  aria-label="Şifre" className={`${inputCls(status.name === "error" && status.field === "password")} pr-10`} />
+                <button type="button" onClick={() => setShow((x) => !x)} aria-label={show ? "Şifreyi gizle" : "Şifreyi göster"} aria-pressed={show}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 inline-flex items-center justify-center rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100">
+                  {show ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              </div>
+            </Field>
+          )}
+          <Btn variant="primary" type="submit" className="w-full justify-center" disabled={busy}>
+            {busy ? (mode === "password" ? "Giriş yapılıyor…" : "Gönderiliyor…") : mode === "password" ? "Giriş Yap" : "Giriş bağlantısı gönder"}
           </Btn>
-          <p className="cw-11 text-slate-400">Yalnızca davet edilen ekip üyeleri giriş yapabilir.</p>
+          <div className="flex flex-wrap items-center justify-between gap-2 cw-11">
+            <span className="text-slate-400">{mode === "password" ? "Şifrenizi unuttuysanız ajans yöneticinizden yeni şifre isteyin." : "Yalnızca kayıtlı kullanıcılar giriş yapabilir."}</span>
+            {auth.sendLink && (
+              <button type="button" onClick={() => { setMode(mode === "password" ? "link" : "password"); setStatus({ name: "idle" }); }} className="font-semibold text-orange-600 hover:text-orange-700">
+                {mode === "password" ? "E-postayla giriş bağlantısı gönder" : "Şifreyle giriş yap"}
+              </button>
+            )}
+          </div>
         </form>
       )}
     </FullScreenMessage>

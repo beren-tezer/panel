@@ -14,7 +14,8 @@
  *                                    (null ise açıklama görselleri metne gömülür — yalnızca demo)
  *   brandKit?                      → marka kılavuzu API'si (bkz. brandKit.js)
  *   checklist?                     → kontrol listesi şablon/geçmiş API'si (bkz. checklist.js)
- *   agreement?                     → { accept(version) } — ilk girişteki sözleşme onayı (state.agreement: { accepted } | null)
+ *   agreement?                     → { accept(version), save(doc, { reaccept }) } — ilk girişteki sözleşme onayı ve metni
+ *                                    (state.agreement: { accepted } | null; state.agreementText: kayıtlı metin | null → varsayılan taslak)
  *   content?                       → içerik sürümleri: createVersion / upload / removeAsset / urls / refresh (bkz. approvals.js)
  *
  *   createTasks(tasks, { activity, notifications }) → { codes: { taskId: "CW-…" }, checklists, checklistItems }
@@ -29,6 +30,7 @@
 
 import { createSupabaseBrandKit } from "./brandKit.js";
 import { signedInWithEmailLink } from "./passwords.js";
+import { rowToAgreementText } from "./agreement.js";
 import { CONTENT_BUCKET, MAX_CONTENT_BYTES, latestVersion, pendingRequest, validateContentFile } from "./approvals.js";
 import {
   checklistError, createSupabaseChecklist, currentChecklist, incompleteMessage, isMissingRelation, itemsOf, missingForSubmit,
@@ -56,6 +58,7 @@ function newActivity(prev, next) {
 
 export function createMemorySource(buildDemo, { checklist = null, content = null } = {}) {
   let taskNo = 1000;
+  let agreementText = null; // demo: panelden kaydedilen sözleşme metni (sayfa yenilenince sıfırlanır)
   const created = new Map(); // görev kimliği → kod (tekrar denemede aynı kod)
   return {
     draftScope: "demo",
@@ -84,7 +87,16 @@ export function createMemorySource(buildDemo, { checklist = null, content = null
       taskNo = 1000;
       demo.state.tasks.forEach((t) => { const n = Number(String(t.code || "").replace("CW-", "")); if (n > taskNo) taskNo = n; });
       demo.state.features = { checklists: !!checklist, approvals: !!content };
+      demo.state.agreementText = agreementText;
       return demo;
+    },
+    agreement: {
+      async save(doc) {
+        await new Promise((r) => setTimeout(r, 120));
+        const now = new Date();
+        agreementText = { ...doc, version: now.toISOString().slice(0, 19).replace("T", " "), updatedAt: now.toISOString(), updatedBy: null };
+        return agreementText.version;
+      },
     },
     async persist(action, prev, next, { patchTask, merge, actorId }) {
       if (action.type === "ADD_TASK") patchTask(action.task.id, { code: taskCode(++taskNo) });
@@ -248,6 +260,8 @@ const activityToRow = (a) => ({ id: a.id, task_id: a.taskId, user_id: a.userId, 
 const rowToUser = (r) => ({
   id: r.id, name: r.full_name, email: r.email || "", role: r.role || "employee", title: r.role_title || "", company: r.company || "",
   color: r.color, active: r.active !== false, permissions: r.permissions ?? null, lastActiveAt: r.last_seen_at || null,
+  // 009 öncesi şemada yok (undefined): yönetici ekranında "—" gösterilir.
+  agreementAccepted: r.agreement_accepted, agreementAcceptedAt: r.agreement_accepted_at || null, agreementVersion: r.agreement_version || null,
 });
 const USER_COLUMNS = { name: "full_name", title: "role_title", role: "role", company: "company", color: "color", active: "active", permissions: "permissions" };
 
@@ -715,6 +729,15 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
         if (["PGRST202", "42883"].includes(error.code)) throw new Error("Sözleşme onayı sunucuda henüz etkin değil (supabase/009_agreement.sql çalıştırılmalı).");
         throw new Error("Onayınız kaydedilemedi. Bağlantınızı kontrol edip tekrar deneyin.");
       },
+      // Yalnızca yönetici (sunucuda da denetlenir). reaccept: kaydeden dışında herkesin onayı sıfırlanır.
+      async save(doc, { reaccept = false } = {}) {
+        const { data, error } = await supabase.rpc("save_agreement_text", { p_title: doc.title, p_sections: doc.sections, p_consent: doc.consent, p_reaccept: !!reaccept });
+        if (!error) return data;
+        if (["PGRST202", "42883", "42P01", "PGRST205"].includes(error.code)) throw new Error("Sözleşme metni sunucuda henüz düzenlenemiyor (supabase/010_agreement_text.sql çalıştırılmalı).");
+        if (error.code === "42501") throw new Error("Sözleşme metnini yalnızca yöneticiler düzenleyebilir.");
+        if (error.code === "22023") throw new Error(error.message);
+        throw new Error("Sözleşme kaydedilemedi. Bağlantınızı kontrol edip tekrar deneyin.");
+      },
     },
 
     /* Sekmeye dönüldüğünde: oturum hâlâ geçerli mi, rol / aktiflik sunucuda değişti mi (canlı güncelleme koptuysa bile). */
@@ -743,7 +766,9 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
 
       // Kontrol listesi tabloları yoksa (006 çalıştırılmamış) panel onlarsız açılır.
       const optional = (p) => p.catch((err) => { if (isMissingRelation(err)) return null; throw err; });
-      const [profiles, brands, members, tasks, comments, attachments, assets, activity, approvals, notifications, checklists, checklistItems, versions, contentAssets, requests] = await Promise.all([
+      const agreementRow = supabase.from("agreement_text").select("*").maybeSingle()
+        .then(({ data, error }) => { if (error) throw error; return data; });
+      const [profiles, brands, members, tasks, comments, attachments, assets, activity, approvals, notifications, checklists, checklistItems, versions, contentAssets, requests, agreementTextRow] = await Promise.all([
         selectAll("profiles", "full_name"),
         selectAll("brands", "created_at"),
         selectAll("brand_members", "created_at"),
@@ -759,6 +784,7 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
         optional(selectAll("task_content_versions", "created_at")),
         optional(selectAll("task_content_assets", "created_at")),
         optional(selectAll("approval_requests", "requested_at")),
+        optional(agreementRow), // 010 çalıştırılmamışsa yerleşik taslak gösterilir
       ]);
       checklistsAvailable = !!checklists && !!checklistItems;
       approvalsAvailable = !!versions && !!contentAssets && !!requests;
@@ -797,6 +823,7 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
           approvalRequests: approvalsAvailable ? requests.map(rowToRequest) : [],
           features: { checklists: checklistsAvailable, approvals: approvalsAvailable },
           agreement,
+          agreementText: rowToAgreementText(agreementTextRow),
         },
       };
     },

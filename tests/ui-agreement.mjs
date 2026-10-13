@@ -62,10 +62,40 @@ try {
   check("Sonraki girişte sözleşme sorulmaz", (await path()) === "/dashboard?authdemo" && !(await page(`return !!$("[data-agreement]");`)), await path());
   await logoutFromPanel();
 
-  /* Daha önce onaylamış müşteri */
+  /* Yönetici: metni panelden düzenler */
+  await login("admin@demo.test");
+  await waitFor(() => page(`return location.pathname === "/dashboard" && !!$("aside");`), 8000).catch(() => {});
+  check("Onaylamış yönetici doğrudan /dashboard'a gider", (await path()) === "/dashboard?authdemo" && !(await page(`return !!$("[data-agreement]");`)), await path());
+  await page(`exact("aside button", "Sözleşme")?.click() || $$("aside button").find((b) => b.textContent.trim() === "Sözleşme").click(); return true;`);
+  await waitFor(() => page(`return !!$("[data-agreement-admin]");`), 5000).catch(() => {});
+  check("Admin menüsünde “Sözleşme” sayfası: kayıtlı metin yok → hazır taslak düzenlenir", await page(`return !!$("[data-agreement-admin]") && $("[data-agreement-status]").textContent.includes("Henüz kaydedilmiş metin yok") && $$("[data-agreement-section]").length === 14;`));
+  check("Doldurulacak boşluklar listelenir", await page(`const b = $("[data-agreement-blanks]"); return !!b && b.textContent.includes("[Şirket Unvanı]") && b.textContent.includes("[Cezai Şart Tutarı]");`));
+  check("Onay durumu: onaylayan / bekleyen kullanıcılar", await page(`return $$("[data-agreement-person='accepted']").length >= 3 && $("[data-agreement-people]").textContent.includes("aktif kullanıcı onayladı");`));
+  check("Değişiklik yokken Kaydet pasif", await page(`return $$("[data-agreement-admin] button").filter((b) => b.textContent.trim() === "Kaydet").every((b) => b.disabled);`));
+
+  // Boşluğu doldur, boş bölüm ekleyip doğrulamayı dene
+  await page(`const t = $("textarea[aria-label='Bölüm 1 metni']"); setValue(t, t.value.replace("[Şirket Unvanı]", "Atlas Dijital Ajans Ltd. Şti.")); return true;`);
+  check("Doldurulan boşluk listeden düşer; kaydedilmemiş uyarısı", await page(`return !$("[data-agreement-blanks]").textContent.includes("[Şirket Unvanı]") && !!$("[data-agreement-dirty]");`));
+  await page(`exact("button", "Bölüm Ekle").click(); await tick(); $$("[data-agreement-admin] button").find((b) => b.textContent.trim() === "Kaydet").click(); return true;`);
+  check("Boş bölüm kaydedilmez (alan hatası)", await waitFor(() => page(`return $("[data-agreement-section='14']")?.textContent.includes("Bölüm metni boş olamaz.");`), 2000).catch(() => false));
+  await page(`setValue($("input[aria-label='Bölüm 15 başlığı']"), "15. Ek Hüküm"); setValue($("textarea[aria-label='Bölüm 15 metni']"), "Ek hüküm metni."); return true;`);
+  await page(`setValue($("textarea[aria-label='Bölüm 15 metni']"), "Ek hüküm metni."); $$("button[aria-label='Yukarı taşı']").at(-1).click(); return true;`);
+  check("Bölüm sırası değiştirilebilir", await page(`return $("input[aria-label='Bölüm 14 başlığı']").value === "15. Ek Hüküm";`));
+  await page(`exact("button", "Önizle").click(); return true;`);
+  check("Önizleme: kullanıcının göreceği metin, kalan boşluklar vurgulu", await waitFor(() => page(`const p = $("[data-agreement-preview]"); return !!p && p.textContent.includes("Atlas Dijital Ajans Ltd. Şti.") && p.textContent.includes("Ek hüküm metni.") && $$("[data-agreement-blank]", p).length > 0;`), 2000).catch(() => false));
+  await page(`exact("button", "Kapat").click(); return true;`);
+  await page(`$("[data-agreement-reaccept]").click(); await tick(); $$("[data-agreement-admin] button").find((b) => b.textContent.trim() === "Kaydet").click(); return true;`);
+  check("Kaydedilir (herkes yeniden onaylasın)", await waitFor(() => page(`return document.body.textContent.includes("Diğer tüm kullanıcılar bir sonraki girişte yeniden onaylayacak") && $("[data-agreement-status]").textContent.includes("Yayındaki sürüm") && !$("[data-agreement-dirty]");`), 4000).catch(() => false));
+  check("Kaydeden yönetici onaylamış, diğerleri bekliyor", await page(`return $$("[data-agreement-person='accepted']").length === 1 && $$("[data-agreement-person='pending']").length >= 3;`));
+  await logoutFromPanel();
+
+  /* Daha önce onaylamış müşteri: metin değiştiği için yeniden onaylar */
   await login("musteri@demo.test");
+  await waitFor(() => page(`return location.pathname === "/sozlesme";`), 8000).catch(() => {});
+  check("Yeniden onay: müşteri yeni metni görür", await onAgreement() && await page(`const t = $("[data-agreement]").textContent; return t.includes("Atlas Dijital Ajans Ltd. Şti.") && t.includes("15. Ek Hüküm") && !t.includes("[Şirket Unvanı]");`), await path());
+  await page(`$("[data-agreement-consent]").click(); await tick(); exact("button", "Onaylıyorum, Devam Et").click(); return true;`);
   await waitFor(() => page(`return location.pathname === "/onay";`), 8000).catch(() => {});
-  check("Onaylamış hesap doğrudan paneline gider", (await path()) === "/onay?authdemo" && !(await page(`return !!$("[data-agreement]");`)), await path());
+  check("Onaydan sonra müşteri /onay'a gider", (await path()) === "/onay?authdemo" && !(await page(`return !!$("[data-agreement]");`)), await path());
 
   /* Mobil */
   {

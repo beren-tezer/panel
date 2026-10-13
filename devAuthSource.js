@@ -14,7 +14,8 @@ export function createAuthDemoSource(base) {
   let session = null;
   const passwords = Object.fromEntries(Object.keys(DEV_ACCOUNTS).map((e) => [e, DEV_PASSWORD]));
   const emailOf = (id) => Object.keys(DEV_ACCOUNTS).find((e) => DEV_ACCOUNTS[e] === id);
-  const accepted = new Set(Object.keys(DEV_ACCOUNTS).filter((e) => e !== "yeni@demo.test"));
+  let accepted = new Set(Object.keys(DEV_ACCOUNTS).filter((e) => e !== "yeni@demo.test"));
+  const acceptedById = (id) => { const e = emailOf(id); return e ? accepted.has(e) : undefined; };
   const listeners = new Set();
   const emit = () => listeners.forEach((fn) => fn());
   return {
@@ -23,9 +24,15 @@ export function createAuthDemoSource(base) {
     async load() {
       if (!session) throw new AuthRequiredError();
       const demo = await base.load();
-      return { ...demo, me: session, state: { ...demo.state, agreement: { accepted: accepted.has(emailOf(session)) } } };
+      const users = demo.state.users.map((u) => ({ ...u, agreementAccepted: acceptedById(u.id) }));
+      return { ...demo, me: session, users, state: { ...demo.state, users, agreement: { accepted: accepted.has(emailOf(session)) } } };
     },
     agreement: {
+      async save(doc, { reaccept = false } = {}) {
+        const version = await base.agreement.save(doc);
+        if (reaccept) accepted = new Set([emailOf(session)]);
+        return version;
+      },
       async accept() {
         await new Promise((r) => setTimeout(r, 120));
         if (globalThis.__cwSimulateSaveError) { globalThis.__cwSimulateSaveError = null; throw new Error("Onayınız kaydedilemedi. Bağlantınızı kontrol edip tekrar deneyin."); }

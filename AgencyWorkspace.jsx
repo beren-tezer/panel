@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { createMemorySource } from "./workspaceData.js";
 import { ROUTES, locationKey, navigate, resolveRoute, safeNext, subscribeLocation } from "./router.js";
 import { MIN_PASSWORD, validatePasswordChange } from "./passwords.js";
-import { AGREEMENT_CONSENT, AGREEMENT_SECTIONS, AGREEMENT_TITLE, AGREEMENT_VERSION } from "./agreement.js";
+import { AGREEMENT_LIMITS, DEFAULT_AGREEMENT, normalizeAgreement, placeholdersIn, splitBlanks, validateAgreement } from "./agreement.js";
 import {
   ACCEPT_ATTR, ASSET_CATEGORIES, COLOR_TYPES, FONT_ROLES, FONT_WEIGHTS, IMAGE_PREVIEW, INLINE_VIEWABLE, INSTRUCTION_CATEGORIES, LINK_CATEGORIES,
   MAX_BRAND_FILE_BYTES, VISIBILITY, createBrandKitStore, createMemoryBrandKit, formatBytes, normalizeHex, validateDriveUrl, validateHttpsUrl, validateUpload,
@@ -4997,6 +4997,156 @@ function TeamPage({ search, onViewBrand, onViewKit, onViewTasks, onViewPortal, o
   );
 }
 
+/* ───────────────────────── Admin: Sözleşme metni ve onay durumu ───────────────────────── */
+
+const cloneAgreement = (d) => ({ title: d.title, consent: d.consent, sections: d.sections.map((s) => ({ heading: s.heading, body: s.body })) });
+const sameAgreement = (a, b) => JSON.stringify(normalizeAgreement(a)) === JSON.stringify(normalizeAgreement(b));
+
+function AgreementAdminPage({ text, api, search }) {
+  const { state, notify } = useWS();
+  const saved = text || DEFAULT_AGREEMENT;
+  const [draft, setDraft] = useState(() => cloneAgreement(saved));
+  const [errors, setErrors] = useState({});
+  const [reaccept, setReaccept] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState(false);
+  // Sunucudaki metin değişirse (kayıt / başka yönetici) düzenlenmemiş taslak güncellenir; yarım kalan düzenleme ezilmez.
+  const prevSaved = useRef(saved);
+  useEffect(() => {
+    setDraft((d) => (sameAgreement(d, prevSaved.current) ? cloneAgreement(saved) : d));
+    prevSaved.current = saved;
+  }, [saved.version, saved.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dirty = !sameAgreement(draft, saved);
+  const blanks = placeholdersIn(draft);
+  const author = text?.updatedBy ? state.allUsers.find((u) => u.id === text.updatedBy) : null;
+  const previewDoc = normalizeAgreement(draft);
+
+  const clearErr = (k) => setErrors((e) => (e[k] || e.sections ? { ...e, [k]: "", sections: "" } : e));
+  const set = (k, v) => { setDraft((d) => ({ ...d, [k]: v })); clearErr(k); };
+  const setSection = (i, k, v) => { setDraft((d) => ({ ...d, sections: d.sections.map((s, j) => (j === i ? { ...s, [k]: v } : s)) })); clearErr(`s${i}.${k}`); };
+  // Sıra değişince bölüm hataları kayıtta yeniden hesaplanır.
+  const reorder = (fn) => { setDraft((d) => ({ ...d, sections: fn(d.sections.slice()) })); setErrors({}); };
+  const move = (i, dir) => reorder((a) => { const j = i + dir; if (j < 0 || j >= a.length) return a; [a[i], a[j]] = [a[j], a[i]]; return a; });
+  const remove = (i) => reorder((a) => { a.splice(i, 1); return a; });
+  const add = () => reorder((a) => [...a, { heading: `${a.length + 1}. `, body: "" }]);
+
+  const save = async () => {
+    if (!api || saving) return;
+    const doc = normalizeAgreement(draft);
+    const errs = validateAgreement(doc);
+    setErrors(errs);
+    if (Object.keys(errs).length) { notify("Kaydedilmedi: işaretli alanları düzeltin.", "error"); return; }
+    setSaving(true);
+    try {
+      await api.save(doc, { reaccept });
+      notify(reaccept ? "Sözleşme kaydedildi. Diğer tüm kullanıcılar bir sonraki girişte yeniden onaylayacak." : "Sözleşme kaydedildi.");
+      setReaccept(false);
+    } catch (err) { notify(err?.message || "Sözleşme kaydedilemedi.", "error"); }
+    finally { setSaving(false); }
+  };
+
+  const q = norm(search);
+  const people = state.allUsers
+    .filter((u) => u.active !== false && matchesSearch(q, u.name, u.email, ROLE_LABELS[u.role]))
+    .sort((a, b) => (a.agreementAccepted === b.agreementAccepted ? a.name.localeCompare(b.name, "tr") : a.agreementAccepted ? 1 : -1));
+  const known = people.filter((u) => typeof u.agreementAccepted === "boolean");
+  const acceptedCount = known.filter((u) => u.agreementAccepted).length;
+  const taCls = (err) => `w-full rounded-lg border px-3 py-2 cw-13 outline-none bg-white focus:ring-2 resize-y ${err ? "border-red-300 focus:ring-red-100" : "border-slate-200 focus:border-orange-400 focus:ring-orange-100"}`;
+  const saveBtn = <Btn variant="primary" onClick={save} disabled={!api || saving || (!dirty && !reaccept)}>{saving ? "Kaydediliyor…" : <><Check size={14} />Kaydet</>}</Btn>;
+
+  return (
+    <div className="space-y-4" data-agreement-admin="">
+      <PageHeader title="Gizlilik ve Rekabet Sözleşmesi" description="Kullanıcıların panele ilk girişte onayladığı metin. Köşeli parantezli alanları doldurup kaydedin."
+        actions={<><Btn variant="secondary" onClick={() => setPreview(true)}><Eye size={14} />Önizle</Btn>{saveBtn}</>} />
+
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 cw-12 text-slate-500" data-agreement-status="">
+        {text
+          ? <span>Yayındaki sürüm: <strong className="text-slate-700">{text.version}</strong>{text.updatedAt && <> · {fmtDateTime(text.updatedAt)}</>}{author && <> · {author.name}</>}</span>
+          : <span className="text-amber-700">Henüz kaydedilmiş metin yok — kullanıcılar aşağıdaki hazır taslağı görüyor.</span>}
+        {dirty && <span className="text-orange-600 font-semibold" data-agreement-dirty="">Kaydedilmemiş değişiklikler var</span>}
+      </div>
+      {!api && <p role="alert" className="cw-12 text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">Bu ortamda sözleşme metni kaydedilemiyor.</p>}
+
+      {blanks.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3" data-agreement-blanks="">
+          <p className="cw-13 font-semibold text-amber-900 flex items-center gap-2"><AlertTriangle size={15} />Doldurulması gereken {blanks.length} alan</p>
+          <p className="cw-12 text-amber-800 mt-0.5">Köşeli parantezli ifadeleri gerçek bilgilerle değiştirin (parantezleri de silin). Doldurulmayanlar kullanıcıya sarı vurgulu görünür.</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">{blanks.map((b) => <span key={b} className="cw-11 font-medium bg-white border border-amber-200 text-amber-900 rounded-md px-1.5 py-0.5">{b}</span>)}</div>
+        </div>
+      )}
+
+      <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-4">
+        <Field label="Başlık" error={errors.title}>
+          <input value={draft.title} maxLength={AGREEMENT_LIMITS.title} onChange={(e) => set("title", e.target.value)} className={inputCls(errors.title)} aria-label="Sözleşme başlığı" />
+        </Field>
+        <div className="space-y-3" data-agreement-sections="">
+          {draft.sections.map((s, i) => (
+            <div key={i} className="border border-slate-200 rounded-lg p-3 space-y-2" data-agreement-section={i}>
+              <div className="flex items-start gap-2">
+                <div className="flex-1 min-w-0">
+                  <input value={s.heading} maxLength={AGREEMENT_LIMITS.heading} onChange={(e) => setSection(i, "heading", e.target.value)} placeholder="Bölüm başlığı"
+                    aria-label={`Bölüm ${i + 1} başlığı`} className={`${inputCls(errors[`s${i}.heading`])} font-semibold`} />
+                  {errors[`s${i}.heading`] && <span className="cw-11 text-red-600">{errors[`s${i}.heading`]}</span>}
+                </div>
+                <div className="flex shrink-0">
+                  <IconAction icon={ArrowUp} label="Yukarı taşı" disabled={i === 0} onClick={() => move(i, -1)} />
+                  <IconAction icon={ArrowDown} label="Aşağı taşı" disabled={i === draft.sections.length - 1} onClick={() => move(i, 1)} />
+                  <IconAction icon={Trash2} label="Bölümü sil" tone="danger" disabled={draft.sections.length === 1} onClick={() => remove(i)} />
+                </div>
+              </div>
+              <textarea value={s.body} maxLength={AGREEMENT_LIMITS.body} rows={Math.min(10, Math.max(3, s.body.split("\n").length + 1))} onChange={(e) => setSection(i, "body", e.target.value)}
+                placeholder="Bölüm metni (madde işareti için satır başına • koyabilirsiniz)" aria-label={`Bölüm ${i + 1} metni`} className={taCls(errors[`s${i}.body`])} />
+              {errors[`s${i}.body`] && <span className="cw-11 text-red-600">{errors[`s${i}.body`]}</span>}
+            </div>
+          ))}
+          {errors.sections && <p className="cw-12 text-red-600">{errors.sections}</p>}
+          <Btn variant="secondary" onClick={add} disabled={draft.sections.length >= AGREEMENT_LIMITS.sections}><Plus size={14} />Bölüm Ekle</Btn>
+        </div>
+        <Field label="Onay cümlesi (kullanıcının işaretlediği kutu)" error={errors.consent}>
+          <input value={draft.consent} maxLength={AGREEMENT_LIMITS.consent} onChange={(e) => set("consent", e.target.value)} className={inputCls(errors.consent)} aria-label="Onay cümlesi" />
+        </Field>
+        <label className="flex items-start gap-2.5 cw-13 text-slate-800 cursor-pointer select-none bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5">
+          <input type="checkbox" checked={reaccept} onChange={(e) => setReaccept(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-orange-600" data-agreement-reaccept="" />
+          <span><strong>Herkes yeniden onaylasın.</strong> <span className="text-slate-500">Esaslı bir değişiklik yaptıysanız işaretleyin: sizin dışınızdaki tüm kullanıcılardan bir sonraki girişte yeni metni onaylamaları istenir. Yazım düzeltmelerinde işaretlemeyin.</span></span>
+        </label>
+        <div className="flex justify-end">{saveBtn}</div>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden" data-agreement-people="">
+        <div className="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
+          <p className="cw-13 font-semibold text-slate-900">Onay Durumu</p>
+          <p className="cw-12 text-slate-500">{known.length ? `${acceptedCount} / ${known.length} aktif kullanıcı onayladı` : "Onay bilgisi yok"}</p>
+        </div>
+        <ul className="divide-y divide-slate-100">
+          {people.map((u) => (
+            <li key={u.id} className="px-4 py-2.5 flex items-center gap-2.5" data-agreement-person={u.agreementAccepted === true ? "accepted" : u.agreementAccepted === false ? "pending" : "unknown"}>
+              <Avatar userId={u.id} size={28} />
+              <div className="flex-1 min-w-0"><p className="cw-13 font-medium text-slate-900 truncate">{u.name}</p><p className="cw-11 text-slate-400 truncate">{u.email || ROLE_LABELS[u.role]}</p></div>
+              <span className="hidden sm:block"><RoleBadge role={u.role} /></span>
+              {u.agreementAccepted === true
+                ? <span className="cw-12 text-emerald-700 text-right">Onayladı{u.agreementAcceptedAt && <span className="block cw-11 text-slate-400">{fmtDateTime(u.agreementAcceptedAt)}</span>}</span>
+                : u.agreementAccepted === false
+                  ? <span className="cw-12 font-semibold text-amber-700">Bekliyor</span>
+                  : <span className="cw-12 text-slate-400">—</span>}
+            </li>
+          ))}
+          {!people.length && <li className="px-4 py-8 text-center cw-13 text-slate-500">Eşleşen kullanıcı yok.</li>}
+        </ul>
+      </div>
+
+      {preview && (
+        <Modal title={previewDoc.title || "Sözleşme"} subtitle="Önizleme — kullanıcının göreceği metin" onClose={() => setPreview(false)} width={720}
+          footer={<Btn variant="secondary" onClick={() => setPreview(false)}>Kapat</Btn>}>
+          <div className="space-y-3.5 cw-13 text-slate-700" data-agreement-preview="">
+            <AgreementBody doc={{ ...previewDoc, version: dirty ? "kaydedilmemiş taslak" : saved.version }} />
+            <p className="flex items-start gap-2 cw-13 text-slate-800 border-t border-slate-100 pt-3"><span className="mt-0.5 h-4 w-4 shrink-0 rounded border border-slate-300" />{previewDoc.consent}</p>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 /* ───────────────────────── Admin: Kullanıcılar & Yetkiler ───────────────────────── */
 
 function UsersPage({ search }) {
@@ -7066,6 +7216,7 @@ const NAV_BY_ROLE = {
     { key: "approvals", label: "Onay Süreçleri", Icon: CheckCircle2, perm: "canAccessApprovals" },
     { key: "team", label: "Ekip & Marka Yönetimi", Icon: Users, perm: "canManageUsers" },
     { key: "users", label: "Kullanıcılar & Yetkiler", Icon: ShieldCheck, perm: "canManageUsers" },
+    { key: "agreement", label: "Sözleşme", Icon: FileText, perm: "canManageUsers" },
     { key: "notifications", label: "Bildirimler", Icon: Bell },
     { key: "filters", label: "Filtreler", Icon: SlidersHorizontal },
   ],
@@ -7089,15 +7240,15 @@ const NAV_BY_ROLE = {
 const OPS_KEYS = new Set(["overview", "today", "plan", "kit", "files", "filters"]);
 const DEFAULT_PAGE = { admin: "ops", employee: "my", client: "client-home" };
 const PAGE_TITLES = {
-  my: "Bugünkü İşlerim", social: "Sosyal Medya Planı", approvals: "Onay Süreçleri", team: "Ekip & Marka Yönetimi", users: "Kullanıcılar & Yetkiler",
+  my: "Bugünkü İşlerim", social: "Sosyal Medya Planı", approvals: "Onay Süreçleri", team: "Ekip & Marka Yönetimi", users: "Kullanıcılar & Yetkiler", agreement: "Sözleşme",
   notifications: "Bildirimler", "client-home": "Genel Bakış", content: "İçeriklerim", pending: "Onay Bekleyen İçerikler", "client-files": "Marka Dosyaları", "client-kit": "Marka Kılavuzu", "client-history": "Onay Geçmişi",
 };
 const SEARCH_PLACEHOLDERS = {
   ops: "Görev, marka veya kişi ara…", my: "İşlerimde ara…", social: "Plandaki içeriklerde ara…", approvals: "Onay sürecindeki içeriklerde ara…", team: "Marka, çalışan veya müşteri ara…",
-  users: "Kullanıcı veya e-posta ara…", notifications: "Bildirimlerde ara…", "client-home": "İçeriklerimde ara…", content: "İçeriklerimde ara…", pending: "Onay bekleyenlerde ara…", "client-files": "Görev, marka veya kişi ara…", "client-kit": "İçeriklerimde ara…", "client-history": "Onay geçmişinde ara…",
+  users: "Kullanıcı veya e-posta ara…", agreement: "Kullanıcı ara…", notifications: "Bildirimlerde ara…", "client-home": "İçeriklerimde ara…", content: "İçeriklerimde ara…", pending: "Onay bekleyenlerde ara…", "client-files": "Görev, marka veya kişi ara…", "client-kit": "İçeriklerimde ara…", "client-history": "Onay geçmişinde ara…",
 };
 
-function Workspace({ state, dispatch, getState, createTasks, draftScope, contentApi, accountApi, portalSlug, portalKey, actorId, realUserId, onViewAs, allowImpersonation, onSignOut, syncError, denied, media, brandKit, checklistApi }) {
+function Workspace({ state, dispatch, getState, createTasks, draftScope, contentApi, accountApi, agreementApi, portalSlug, portalKey, actorId, realUserId, onViewAs, allowImpersonation, onSignOut, syncError, denied, media, brandKit, checklistApi }) {
   const actor = state.users.find((u) => u.id === actorId) || state.users.find((u) => u.id === realUserId);
   const realUser = state.users.find((u) => u.id === realUserId);
   setDirectory(state.users, actor.id);
@@ -7377,6 +7528,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
         onViewPortal={(userId) => onViewAs(userId)} />
     );
   } else if (currentPage === "users") pageNode = <UsersPage search={filters.search} />;
+  else if (currentPage === "agreement") pageNode = <AgreementAdminPage text={state.agreementText} api={agreementApi} search={filters.search} />;
   else if (currentPage === "notifications") pageNode = <NotificationsPage search={filters.search} onOpen={openNotification} />;
   else if (currentPage === "client-home") pageNode = <ClientHome search={filters.search} brandId={selectedBrandId} onGo={setPage} onOpenNotification={openNotification} />;
   else if (currentPage === "content") pageNode = <ClientContentPage search={filters.search} brandId={selectedBrandId} />;
@@ -7769,7 +7921,27 @@ function ChangePasswordModal({ api, onClose, onDone }) {
 
 /* İlk girişte zorunlu "Gizlilik ve Rekabet Sözleşmesi". Onaylanmadan panelin hiçbir ekranı açılmaz (router.resolveRoute);
    onay sunucuda kaydedilince veriler yeniden yüklenir ve kullanıcı gideceği sayfaya yönlendirilir. */
-function AgreementScreen({ onAccept, onSignOut }) {
+/* Sözleşme metni: bölümler, satır sonları korunur; [boşluklar] vurgulanır (yönetici doldurana kadar). */
+function BlankText({ text }) {
+  return splitBlanks(text).map((p, i) => (p.blank
+    ? <mark key={i} className="bg-amber-100 text-amber-900 rounded px-0.5" data-agreement-blank="">{p.text}</mark>
+    : <React.Fragment key={i}>{p.text}</React.Fragment>));
+}
+function AgreementBody({ doc }) {
+  return (
+    <>
+      {doc.sections.map((sec, i) => (
+        <section key={i}>
+          <h2 className="font-semibold text-slate-900 mb-0.5"><BlankText text={sec.heading} /></h2>
+          <p className="whitespace-pre-line"><BlankText text={sec.body} /></p>
+        </section>
+      ))}
+      <p className="cw-11 text-slate-400">Sürüm: {doc.version}</p>
+    </>
+  );
+}
+
+function AgreementScreen({ doc = DEFAULT_AGREEMENT, onAccept, onSignOut }) {
   const [checked, setChecked] = useState(false);
   const [status, setStatus] = useState({ name: "idle" });
   const saving = status.name === "saving";
@@ -7777,7 +7949,7 @@ function AgreementScreen({ onAccept, onSignOut }) {
     e.preventDefault();
     if (!checked) { setStatus({ name: "error", message: "Devam etmek için sözleşmeyi onaylamanız gerekiyor." }); return; }
     setStatus({ name: "saving" });
-    try { await onAccept(AGREEMENT_VERSION); }
+    try { await onAccept(doc.version); }
     catch (err) { setStatus({ name: "error", message: err?.message || "Onayınız kaydedilemedi." }); }
   };
   return (
@@ -7788,25 +7960,19 @@ function AgreementScreen({ onAccept, onSignOut }) {
           <div className="flex items-center gap-2.5">
             <span className="h-9 w-9 shrink-0 rounded-xl bg-orange-500 text-white flex items-center justify-center"><ShieldCheck size={18} /></span>
             <div className="min-w-0">
-              <h1 className="cw-15 font-semibold text-slate-900">{AGREEMENT_TITLE}</h1>
+              <h1 className="cw-15 font-semibold text-slate-900">{doc.title}</h1>
               <p className="cw-12 text-slate-500">Panele ilk girişinizde bu sözleşmeyi okuyup onaylamanız gerekiyor.</p>
             </div>
           </div>
         </header>
         <div className="flex-1 min-h-0 overflow-y-auto px-5 sm:px-6 py-4 space-y-3.5 cw-13 text-slate-700 leading-relaxed" tabIndex={0} aria-label="Sözleşme metni" data-agreement-text="">
-          {AGREEMENT_SECTIONS.map((sec) => (
-            <section key={sec.heading}>
-              <h2 className="font-semibold text-slate-900 mb-0.5">{sec.heading}</h2>
-              <p>{sec.body}</p>
-            </section>
-          ))}
-          <p className="cw-11 text-slate-400">Sürüm: {AGREEMENT_VERSION}</p>
+          <AgreementBody doc={doc} />
         </div>
         <footer className="px-5 sm:px-6 py-4 border-t border-slate-100 space-y-3">
           <label className="flex items-start gap-2.5 cw-13 text-slate-800 cursor-pointer select-none">
             <input type="checkbox" checked={checked} onChange={(e) => { setChecked(e.target.checked); if (status.name === "error") setStatus({ name: "idle" }); }}
               className="mt-0.5 h-4 w-4 shrink-0 accent-orange-600" data-agreement-consent="" />
-            <span>{AGREEMENT_CONSENT}</span>
+            <span>{doc.consent}</span>
           </label>
           {status.name === "error" && <p role="alert" className="cw-12 text-red-700">{status.message}</p>}
           <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2">
@@ -7840,6 +8006,10 @@ export default function App({ source = demoSource }) {
   const { phase, state, dispatch, getState, createTasks, syncError, denied, reload, realUserId, viewAsId, viewAs } = useWorkspaceStore(source);
   // Marka kılavuzu önbelleği kullanıcıya özeldir: kullanıcı değişince yeniden oluşturulur.
   const brandKit = useMemo(() => (source.brandKit ? createBrandKitStore(source.brandKit) : null), [source, realUserId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Sözleşme metnini kaydetme (Admin → Sözleşme): kayıttan sonra metin ve onay durumları yeniden yüklenir.
+  const agreementApi = useMemo(() => (source.agreement?.save
+    ? { save: async (doc, opts) => { const v = await source.agreement.save(doc, opts); await reload(); return v; } }
+    : null), [source, reload]);
   const signOut = source.auth ? () => { clearUserCaches(realUserId, source.draftScope); source.auth.signOut().catch(() => {}); } : null;
 
   /* Rol bazlı yönlendirme: her konum değişikliğinde (bağlantı, geri/ileri, doğrudan adres) yeniden karar verilir.
@@ -7904,13 +8074,13 @@ export default function App({ source = demoSource }) {
   if (route.agreement) {
     // Kaynak sözleşmeyi desteklemiyorsa (beklenmeyen durum) panel açılmaz.
     if (!source.agreement) return <NoAccessScreen message="Sözleşme onayı şu anda alınamıyor. Ajans yöneticinizle iletişime geçin." onSignOut={signOut} onRetry={reload} />;
-    return <AgreementScreen onSignOut={signOut} onAccept={async (version) => { await source.agreement.accept(version); await reload(); }} />;
+    return <AgreementScreen doc={state.agreementText || DEFAULT_AGREEMENT} onSignOut={signOut} onAccept={async (version) => { await source.agreement.accept(version); await reload(); }} />;
   }
   return (
     <Workspace
       state={state} dispatch={dispatch} getState={getState} createTasks={createTasks} draftScope={source.draftScope || null} actorId={viewAsId} realUserId={realUserId} onViewAs={viewAs}
       allowImpersonation={!!source.allowImpersonation} onSignOut={signOut} syncError={syncError} denied={denied} media={source.media || null} brandKit={brandKit}
-      checklistApi={source.checklist || null} contentApi={source.content || null} accountApi={source.account || null}
+      checklistApi={source.checklist || null} contentApi={source.content || null} accountApi={source.account || null} agreementApi={agreementApi}
       portalSlug={actor?.role === "client" ? route.portal : staffFocus?.slug ?? null} portalKey={actor?.role === "client" ? loc : staffFocus?.n}
     />
   );

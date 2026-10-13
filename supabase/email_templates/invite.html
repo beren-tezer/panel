@@ -1,0 +1,10 @@
+<!-- Supabase Dashboard → Authentication → Emails → Templates → "Invite user"
+     Konu: AgencyOS davetiniz
+     Bağlantı panelin /auth/callback ekranına jetonla gelir; panel doğrular (verifyOtp). E-posta güvenlik tarayıcıları
+     bağlantıyı önceden açsa bile jeton harcanmaz (yalnızca sayfa yüklenir, doğrulama panelde yapılır). -->
+<h2>AgencyOS'e davet edildiniz</h2>
+<p>Merhaba,</p>
+<p>AgencyOS paneline erişiminiz oluşturuldu. Hesabınızı etkinleştirmek ve şifrenizi belirlemek için aşağıdaki bağlantıya tıklayın:</p>
+<p><a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=invite">Daveti kabul et ve şifremi belirle</a></p>
+<p>Bu bağlantı tek kullanımlıktır ve sınırlı süre geçerlidir. Süresi dolarsa ajans yöneticinizden yeni davet isteyin.</p>
+<p>Bu daveti beklemiyorsanız e-postayı yok sayabilirsiniz.</p>

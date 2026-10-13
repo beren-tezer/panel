@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { createMemorySource } from "./workspaceData.js";
 import { ROUTES, locationKey, navigate, resolveRoute, safeNext, subscribeLocation } from "./router.js";
 import { MIN_PASSWORD, validatePasswordChange } from "./passwords.js";
+import { callbackErrorMessage } from "./authCallback.js";
 import { AGREEMENT_LIMITS, DEFAULT_AGREEMENT, normalizeAgreement, placeholdersIn, splitBlanks, validateAgreement } from "./agreement.js";
 import {
   ACCEPT_ATTR, ASSET_CATEGORIES, COLOR_TYPES, FONT_ROLES, FONT_WEIGHTS, IMAGE_PREVIEW, INLINE_VIEWABLE, INSTRUCTION_CATEGORIES, LINK_CATEGORIES,
@@ -3899,6 +3900,10 @@ function StatusDot({ active, labels = ["Aktif", "Pasif"] }) {
   );
 }
 
+function InvitePendingBadge() {
+  return <span data-invite-pending="" title="Davet bağlantısı henüz açılmadı" className="inline-flex items-center h-5 px-1.5 rounded-md border cw-10 font-semibold text-amber-700 bg-amber-50 border-amber-200">Davet bekliyor</span>;
+}
+
 function RoleBadge({ role }) {
   const cls = { admin: "text-slate-800 bg-slate-100 border-slate-300", employee: "text-sky-700 bg-sky-50 border-sky-200", client: "text-violet-700 bg-violet-50 border-violet-200" }[role] || "";
   return <span className={`inline-flex items-center h-5 px-1.5 rounded-md border cw-10 font-semibold ${cls}`}>{ROLE_LABELS[role] || role}</span>;
@@ -4654,7 +4659,9 @@ function BrandChecklist({ value, onChange, error }) {
 }
 
 function UserModal({ userId, presetRole, onClose }) {
-  const { state, dispatch, notify } = useWS();
+  const { state, dispatch, notify, userApi } = useWS();
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState("");
   const existing = userId ? state.allUsers.find((u) => u.id === userId) : null;
   const [form, setForm] = useState(() => ({
     name: existing?.name || "",
@@ -4669,8 +4676,9 @@ function UserModal({ userId, presetRole, onClose }) {
   const set = (k, v) => { setForm((f) => ({ ...f, [k]: v })); setErrors((e) => ({ ...e, [k]: "" })); };
   const setRole = (role) => setForm((f) => ({ ...f, role, permissions: ROLE_DEFAULT_TOGGLES[role] }));
   const allowedToggles = ROLE_ALLOWED_TOGGLES[form.role];
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
+    if (sending) return;
     const next = {};
     if (!form.name.trim()) next.name = "Ad soyad zorunludur.";
     if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) next.email = "Geçerli bir e-posta adresi girin.";
@@ -4683,6 +4691,18 @@ function UserModal({ userId, presetRole, onClose }) {
     if (existing) {
       const ok = dispatch({ type: "UPDATE_USER", id: existing.id, patch: profile }) && dispatch({ type: "SET_USER_BRANDS", userId: existing.id, brandIds: form.role === "admin" ? [] : form.brandIds });
       if (ok) { notify(`“${profile.name}” güncellendi.`); onClose(); }
+    } else if (userApi) {
+      // Canlı: davet sunucuda oluşturulur (rol / izin / marka orada kaydedilir). Sonuç gelmeden "oluşturuldu" denmez;
+      // hata olursa form açık kalır ve neden gösterilir.
+      setSending(true); setSendError("");
+      try {
+        const res = await userApi.invite({ ...profile, email: form.email.trim().toLowerCase() }, form.role === "admin" ? [] : form.brandIds);
+        notify(res?.resent ? `“${profile.name}” için davet yeniden gönderildi.` : `“${profile.name}” için davet e-postası gönderildi.`);
+        onClose();
+      } catch (err) {
+        setSendError(err?.message || "Davet gönderilemedi.");
+        setSending(false);
+      }
     } else {
       const user = { id: uid(), email: form.email.trim().toLowerCase(), active: true, color: BRAND_COLOR_KEYS.filter((c) => AVATAR_TONES[c])[state.allUsers.length % 6] || "slate", createdAt: new Date().toISOString(), lastActiveAt: null, ...profile };
       if (dispatch({ type: "ADD_USER", user, brandIds: form.role === "admin" ? [] : form.brandIds })) {
@@ -4693,7 +4713,9 @@ function UserModal({ userId, presetRole, onClose }) {
   };
   return (
     <Modal title={existing ? "Kullanıcıyı Düzenle" : "Kullanıcı Ekle"} subtitle={existing ? existing.email : "Kullanıcı rolüne göre yalnızca yetkili olduğu ekranları ve markaları görür."} onClose={onClose} width={640}
-      footer={<><Btn variant="secondary" onClick={onClose}>İptal</Btn><Btn variant="primary" type="submit" form="cw-user-form">{existing ? <><Check size={14} />Kaydet</> : <><UserPlus size={14} />Kullanıcı Oluştur</>}</Btn></>}>
+      footer={<><Btn variant="secondary" onClick={onClose} disabled={sending}>İptal</Btn><Btn variant="primary" type="submit" form="cw-user-form" disabled={sending}>{existing ? <><Check size={14} />Kaydet</> : sending ? "Davet gönderiliyor…" : <><UserPlus size={14} />{userApi ? "Davet Gönder" : "Kullanıcı Oluştur"}</>}</Btn></>}>
+      {sendError && <p role="alert" data-invite-error="" className="mb-3 cw-12 text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{sendError}</p>}
+      {!existing && userApi && !sendError && <p className="mb-3 cw-12 text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">Kişiye davet e-postası gider. Bağlantıyla şifresini belirler ve yalnızca bu rolün yetkileriyle giriş yapar.</p>}
       <form id="cw-user-form" onSubmit={submit} noValidate className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
         <Field label="Ad Soyad" error={errors.name}><input autoFocus value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="Örn. Ayşe Demir" className={inputCls(errors.name)} /></Field>
         <Field label="E-posta" error={errors.email}><input type="email" value={form.email} disabled={!!existing} onChange={(e) => set("email", e.target.value)} placeholder="ad@sirket.com" className={`${inputCls(errors.email)} disabled:bg-slate-50 disabled:text-slate-500`} /></Field>
@@ -5150,8 +5172,28 @@ function AgreementAdminPage({ text, api, search }) {
 /* ───────────────────────── Admin: Kullanıcılar & Yetkiler ───────────────────────── */
 
 function UsersPage({ search }) {
-  const { state, dispatch, notify, actor } = useWS();
+  const { state, dispatch, notify, actor, userApi } = useWS();
   const [role, setRole] = useState("all");
+  // Davet durumu (Supabase Auth: e-posta bağlantısı açıldı mı). Alınamazsa rozetsiz devam edilir.
+  const [authStatus, setAuthStatus] = useState(null);
+  const [mailBusy, setMailBusy] = useState(null);
+  const userCount = state.allUsers.length;
+  useEffect(() => {
+    if (!userApi?.status) return undefined;
+    let alive = true;
+    userApi.status().then((list) => { if (alive) setAuthStatus(Object.fromEntries(list.map((x) => [x.id, x]))); }, () => {});
+    return () => { alive = false; };
+  }, [userApi, userCount]);
+  const invitePending = (u) => !!authStatus?.[u.id] && !authStatus[u.id].confirmed;
+  const sendMail = async (u, kind) => {
+    setMailBusy(u.id);
+    try {
+      await userApi[kind](u.id);
+      notify(kind === "resend" ? `${u.name} için yeni davet bağlantısı gönderildi (önceki bağlantı geçersiz).` : `${u.name} için şifre sıfırlama bağlantısı gönderildi.`);
+    } catch (err) {
+      notify(err?.message || "E-posta gönderilemedi.", "error");
+    } finally { setMailBusy(null); }
+  };
   const { open, node } = useManagementModals();
   const q = norm(search);
   const lastActivity = useMemo(() => {
@@ -5173,6 +5215,9 @@ function UsersPage({ search }) {
   const brandsCell = (u) => (u.role === "admin" ? <span className="cw-12 text-slate-500">Tüm markalar</span> : <BrandStack brandIds={brandIdsOf(u.id)} />);
   const actions = (u) => (
     <>
+      {userApi && authStatus?.[u.id] && (invitePending(u)
+        ? <IconAction icon={Send} label="Daveti yeniden gönder" tone="orange" disabled={mailBusy === u.id || u.active === false} onClick={() => sendMail(u, "resend")} />
+        : <IconAction icon={KeyRound} label="Şifre sıfırlama bağlantısı gönder" disabled={mailBusy === u.id || u.active === false || u.id === actor.id} onClick={() => sendMail(u, "reset")} />)}
       <IconAction icon={Pencil} label="Düzenle" onClick={() => open({ kind: "user", userId: u.id })} />
       <IconAction icon={Layers} label="Marka Ata" tone="orange" disabled={u.role === "admin"} onClick={() => open({ kind: "user-brands", userId: u.id })} />
       <IconAction icon={u.active === false ? RotateCcw : X} label={u.active === false ? "Aktifleştir" : "Pasifleştir"} tone={u.active === false ? "default" : "danger"} disabled={u.id === actor.id} onClick={() => toggleActive(u)} />
@@ -5193,7 +5238,7 @@ function UsersPage({ search }) {
                   <td className="px-3 py-2.5 cw-12 text-slate-600">{u.email || "—"}</td>
                   <td className="px-3 py-2.5"><RoleBadge role={u.role} /></td>
                   <td className="px-3 py-2.5">{brandsCell(u)}</td>
-                  <td className="px-3 py-2.5"><StatusDot active={u.active !== false} /></td>
+                  <td className="px-3 py-2.5"><span className="inline-flex items-center gap-1 flex-wrap"><StatusDot active={u.active !== false} />{invitePending(u) && <InvitePendingBadge />}</span></td>
                   <td className="px-3 py-2.5 cw-12 text-slate-500 whitespace-nowrap">{lastActivity[u.id] ? fmtDateTime(lastActivity[u.id]) : "Henüz yok"}</td>
                   <td className="px-2 py-2.5 whitespace-nowrap">{actions(u)}</td>
                 </tr>
@@ -5207,7 +5252,7 @@ function UsersPage({ search }) {
         {list.map((u) => (
           <div key={u.id} className="bg-white border border-slate-200 rounded-xl p-3">
             <div className="flex items-center gap-2.5"><Avatar userId={u.id} size={32} /><div className="flex-1 min-w-0"><p className="cw-13 font-semibold text-slate-900 truncate">{u.name}</p><p className="cw-11 text-slate-500 truncate">{u.email}</p></div><RoleBadge role={u.role} /></div>
-            <div className="mt-2 flex items-center justify-between gap-2">{brandsCell(u)}<StatusDot active={u.active !== false} /></div>
+            <div className="mt-2 flex items-center justify-between gap-2">{brandsCell(u)}<span className="inline-flex items-center gap-1">{invitePending(u) && <InvitePendingBadge />}<StatusDot active={u.active !== false} /></span></div>
             <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between"><span className="cw-11 text-slate-400">{lastActivity[u.id] ? fmtDateTime(lastActivity[u.id]) : "Aktivite yok"}</span><span>{actions(u)}</span></div>
           </div>
         ))}
@@ -7248,7 +7293,7 @@ const SEARCH_PLACEHOLDERS = {
   users: "Kullanıcı veya e-posta ara…", agreement: "Kullanıcı ara…", notifications: "Bildirimlerde ara…", "client-home": "İçeriklerimde ara…", content: "İçeriklerimde ara…", pending: "Onay bekleyenlerde ara…", "client-files": "Görev, marka veya kişi ara…", "client-kit": "İçeriklerimde ara…", "client-history": "Onay geçmişinde ara…",
 };
 
-function Workspace({ state, dispatch, getState, createTasks, draftScope, contentApi, accountApi, agreementApi, portalSlug, portalKey, actorId, realUserId, onViewAs, allowImpersonation, onSignOut, syncError, denied, media, brandKit, checklistApi }) {
+function Workspace({ state, dispatch, getState, createTasks, draftScope, contentApi, accountApi, agreementApi, userApi, portalSlug, portalKey, actorId, realUserId, onViewAs, allowImpersonation, onSignOut, syncError, denied, media, brandKit, checklistApi }) {
   const actor = state.users.find((u) => u.id === actorId) || state.users.find((u) => u.id === realUserId);
   const realUser = state.users.find((u) => u.id === realUserId);
   setDirectory(state.users, actor.id);
@@ -7407,9 +7452,11 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
     brandKitStore: brandKit,
     checklistApi: checklistsOn ? checklistApi : null, checklistIndex, ensureChecklist, submitTask,
     contentApi: state.features?.approvals ? contentApi : null,
+    // Yalnızca kendi oturumunda (önizleme değil) — sunucu ayrıca yönetici yetkisini denetler.
+    userApi: actor.id === realUserId ? userApi : null,
     // Gerçek oturumda başka kullanıcı olarak önizleme yapılırken kılavuz da salt okunurdur.
     previewOnly: actor.id !== realUserId && !allowImpersonation,
-  }), [ctxState, dispatch, brandsById, commentCount, attachmentsByTask, revisionByTask, notify, updateTask, openTask, copyLink, media, actor, role, allowed, statusOptions, selectedBrandId, brandKit, realUserId, allowImpersonation, checklistsOn, checklistApi, checklistIndex, ensureChecklist, submitTask, contentApi, state.features]);
+  }), [ctxState, dispatch, brandsById, commentCount, attachmentsByTask, revisionByTask, notify, updateTask, openTask, copyLink, media, actor, role, allowed, statusOptions, selectedBrandId, brandKit, realUserId, allowImpersonation, checklistsOn, checklistApi, checklistIndex, ensureChecklist, submitTask, contentApi, state.features, userApi]);
 
   /* Müşteri onay bağlantısı (/onay/<adres>, /onay): adres yalnızca yönlendirir, yetki vermez. Markayı kullanıcı zaten
      görebiliyorsa (RLS) o markanın onay ekranı açılır; aksi halde — marka var olsun ya da olmasın — aynı mesaj gösterilir. */
@@ -7845,7 +7892,7 @@ function LoginScreen({ auth }) {
             {busy ? (mode === "password" ? "Giriş yapılıyor…" : "Gönderiliyor…") : mode === "password" ? "Giriş Yap" : "Giriş bağlantısı gönder"}
           </Btn>
           <div className="flex flex-wrap items-center justify-between gap-2 cw-11">
-            <span className="text-slate-400">{mode === "password" ? "Şifrenizi unuttuysanız ajans yöneticinizden yeni şifre isteyin." : "Yalnızca kayıtlı kullanıcılar giriş yapabilir."}</span>
+            <span className="text-slate-400">{mode === "password" ? "Şifrenizi unuttuysanız ajans yöneticinizden şifre sıfırlama bağlantısı isteyin." : "Yalnızca kayıtlı kullanıcılar giriş yapabilir."}</span>
             {auth.sendLink && (
               <button type="button" onClick={() => { setMode(mode === "password" ? "link" : "password"); setStatus({ name: "idle" }); }} className="font-semibold text-orange-600 hover:text-orange-700">
                 {mode === "password" ? "E-postayla giriş bağlantısı gönder" : "Şifreyle giriş yap"}
@@ -7854,6 +7901,93 @@ function LoginScreen({ auth }) {
           </div>
         </form>
       )}
+    </FullScreenMessage>
+  );
+}
+
+/* E-posta bağlantısı dönüşü (/auth/callback): davet / şifre sıfırlama jetonu doğrulanır, oturum kurulur, kullanıcı rolüne
+   (ve gerekirse önce /sifre-olustur'a) yönlendirilir. Doğrulama bitmeden hiçbir yönlendirme yapılmaz; süresi dolmuş veya
+   kullanılmış bağlantıda kullanıcı sessizce /login'e atılmaz, nedeni gösterilir. */
+function AuthCallbackScreen({ auth, phaseName, reload }) {
+  const info = auth?.callback || null;
+  const [next] = useState(() => safeNext(new URLSearchParams(window.location.search).get("next")) || ROUTES.dashboard);
+  const [status, setStatus] = useState(() => (info && (info.error || info.errorCode) ? { name: "error", info }
+    : info?.tokenHash && auth.completeCallback ? { name: "verifying" } : { name: "done" }));
+  useEffect(() => {
+    if (status.name !== "verifying") return undefined;
+    let alive = true;
+    auth.completeCallback().then(() => reload()).then(
+      () => { if (alive) setStatus({ name: "done" }); },
+      (err) => { if (alive) setStatus({ name: "error", info: { errorCode: err?.errorCode || null, errorDescription: err?.errorDescription || err?.message || null } }); },
+    );
+    return () => { alive = false; };
+  }, [status.name]); // eslint-disable-line react-hooks/exhaustive-deps
+  const settled = status.name === "done" && phaseName !== "loading";
+  useEffect(() => {
+    // Oturum hazır (veya erişim / hata ekranı gösterilecek): rol bazlı yönlendirme router'a bırakılır.
+    if (settled && phaseName !== "auth") navigate(next, { replace: true });
+  }, [settled, phaseName]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (status.name === "error" || (settled && phaseName === "auth")) {
+    const msg = status.name === "error" ? callbackErrorMessage(status.info) : callbackErrorMessage({});
+    const signedIn = phaseName === "ready";
+    return (
+      <FullScreenMessage>
+        <div role="alert" className="cw-13 text-slate-700" data-callback-error={status.info?.errorCode || "invalid"}>
+          <p className="flex items-center gap-2 font-semibold text-slate-900 mb-1"><AlertTriangle size={16} className="text-amber-600 shrink-0" />{msg.title}</p>
+          <p>{msg.text}</p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Btn variant="primary" onClick={() => navigate(signedIn ? ROUTES.dashboard : ROUTES.login, { replace: true })}>{signedIn ? "Panele Dön" : "Giriş Sayfasına Git"}</Btn>
+          </div>
+        </div>
+      </FullScreenMessage>
+    );
+  }
+  return <FullScreenMessage><p role="status" className="cw-13 text-slate-500 text-center" data-callback-verifying="">Bağlantınız doğrulanıyor…</p></FullScreenMessage>;
+}
+
+/* Davet / şifre sıfırlama bağlantısıyla gelen kullanıcı: panele geçmeden önce şifresini belirler (/sifre-olustur).
+   Şifre yalnızca Supabase Auth'ta saklanır. Kaydedilince rolüne göre (sözleşme onayı gerekiyorsa önce /sozlesme) yönlenir. */
+function SetPasswordScreen({ api, email, onDone, onSignOut }) {
+  const [form, setForm] = useState({ next: "", repeat: "" });
+  const [errors, setErrors] = useState({});
+  const [show, setShow] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const set = (k, v) => { setForm((f) => ({ ...f, [k]: v })); setErrors((e) => ({ ...e, [k]: "", form: "" })); };
+  const submit = async (e) => {
+    e.preventDefault();
+    if (saving) return;
+    const errs = validatePasswordChange(form, false);
+    setErrors(errs);
+    if (Object.keys(errs).length) return;
+    setSaving(true);
+    try { await api.setInitialPassword(form.next); await onDone(); }
+    catch (err) { setErrors({ [err?.field || "form"]: err?.message || "Şifre kaydedilemedi." }); setSaving(false); }
+  };
+  const type = show ? "text" : "password";
+  return (
+    <FullScreenMessage>
+      <div className="flex items-center gap-2.5 mb-4">
+        <span className="h-9 w-9 shrink-0 rounded-xl bg-orange-500 text-white flex items-center justify-center"><KeyRound size={18} /></span>
+        <div className="min-w-0"><p className="cw-13 font-semibold text-slate-900">Şifrenizi belirleyin</p><p className="cw-12 text-slate-500 truncate">{email}</p></div>
+      </div>
+      <form onSubmit={submit} noValidate className="space-y-3" data-set-password="">
+        <p className="cw-12 text-slate-600">Hesabınızı etkinleştirmek için bir şifre belirleyin. Sonraki girişlerinizde e-posta adresiniz ve bu şifreyi kullanacaksınız.</p>
+        {/* Parola yöneticileri için kullanıcı adı (görünmez). */}
+        <input type="email" autoComplete="username" value={email || ""} readOnly hidden />
+        <Field label="Yeni Şifre" error={errors.next}>
+          <input type={type} autoFocus autoComplete="new-password" value={form.next} onChange={(e) => set("next", e.target.value)} aria-label="Yeni Şifre" className={inputCls(errors.next)} />
+        </Field>
+        <Field label="Yeni Şifre (Tekrar)" error={errors.repeat}>
+          <input type={type} autoComplete="new-password" value={form.repeat} onChange={(e) => set("repeat", e.target.value)} aria-label="Yeni Şifre (Tekrar)" className={inputCls(errors.repeat)} />
+        </Field>
+        <label className="inline-flex items-center gap-2 cw-12 text-slate-600 cursor-pointer select-none">
+          <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} className="h-4 w-4 accent-orange-600" />Şifreleri göster
+        </label>
+        <p className="cw-11 text-slate-500">En az {MIN_PASSWORD} karakter; en az bir harf ve bir rakam içermeli.</p>
+        {errors.form && <p role="alert" className="cw-12 text-red-700">{errors.form}</p>}
+        <Btn variant="primary" type="submit" className="w-full justify-center" disabled={saving}>{saving ? "Kaydediliyor…" : <><Check size={14} />Şifreyi Kaydet ve Devam Et</>}</Btn>
+        {onSignOut && <button type="button" onClick={onSignOut} disabled={saving} className="w-full cw-12 font-semibold text-slate-500 hover:text-slate-800">Çıkış Yap</button>}
+      </form>
     </FullScreenMessage>
   );
 }
@@ -8019,7 +8153,13 @@ export default function App({ source = demoSource }) {
   const routePhase = phase.name === "ready" && state ? "ready" : phase.name === "auth" && source.auth ? "auth" : phase.name;
   // Sözleşme onayı oturumdaki gerçek kullanıcıya aittir (rol değiştirici ile önizlenen kullanıcıya değil).
   const agreementAccepted = routePhase === "ready" && state.agreement ? state.agreement.accepted : undefined;
-  const route = resolveRoute({ path: window.location.pathname, search: window.location.search, phase: routePhase, role: actor?.role || null, agreementAccepted });
+  // Davet / sıfırlama bağlantısıyla gelip şifresini henüz belirlememiş kullanıcı (yalnızca gerçek oturum sahibi).
+  const needsPassword = routePhase === "ready" && !!state.needsPassword && !!source.account?.setInitialPassword;
+  const route = resolveRoute({ path: window.location.pathname, search: window.location.search, phase: routePhase, role: actor?.role || null, agreementAccepted, needsPassword });
+  // Davet ve kullanıcı e-postaları (yalnızca canlı kaynak). Davetten sonra liste yeniden yüklenir.
+  const userApi = useMemo(() => (source.users
+    ? { ...source.users, invite: async (...args) => { const res = await source.users.invite(...args); await reload(); return res; } }
+    : null), [source, reload]);
   const [staffFocus, setStaffFocus] = useState(null);
   useEffect(() => {
     if (!route.redirect) return;
@@ -8045,6 +8185,7 @@ export default function App({ source = demoSource }) {
   }, [phase.name, source, realUserId, reload, getState]);
 
   if (route.redirect) return <FullScreenMessage><p role="status" className="cw-13 text-slate-500 text-center">Yönlendiriliyor…</p></FullScreenMessage>;
+  if (route.callback) return <AuthCallbackScreen auth={source.auth} phaseName={phase.name} reload={reload} />;
   if (phase.name === "auth" && source.auth) return <LoginScreen auth={source.auth} />;
   if (phase.name === "no-access") return <NoAccessScreen message={phase.message} onSignOut={signOut} onRetry={reload} />;
   if (phase.name === "ready" && state && (!actor || !ROLES.includes(actor.role))) {
@@ -8071,6 +8212,10 @@ export default function App({ source = demoSource }) {
       </FullScreenMessage>
     );
   }
+  if (route.setPassword) {
+    const me = state.users.find((u) => u.id === realUserId);
+    return <SetPasswordScreen api={source.account} email={me?.email || ""} onSignOut={signOut} onDone={reload} />;
+  }
   if (route.agreement) {
     // Kaynak sözleşmeyi desteklemiyorsa (beklenmeyen durum) panel açılmaz.
     if (!source.agreement) return <NoAccessScreen message="Sözleşme onayı şu anda alınamıyor. Ajans yöneticinizle iletişime geçin." onSignOut={signOut} onRetry={reload} />;
@@ -8080,7 +8225,7 @@ export default function App({ source = demoSource }) {
     <Workspace
       state={state} dispatch={dispatch} getState={getState} createTasks={createTasks} draftScope={source.draftScope || null} actorId={viewAsId} realUserId={realUserId} onViewAs={viewAs}
       allowImpersonation={!!source.allowImpersonation} onSignOut={signOut} syncError={syncError} denied={denied} media={source.media || null} brandKit={brandKit}
-      checklistApi={source.checklist || null} contentApi={source.content || null} accountApi={source.account || null} agreementApi={agreementApi}
+      checklistApi={source.checklist || null} contentApi={source.content || null} accountApi={source.account || null} agreementApi={agreementApi} userApi={userApi}
       portalSlug={actor?.role === "client" ? route.portal : staffFocus?.slug ?? null} portalKey={actor?.role === "client" ? loc : staffFocus?.n}
     />
   );

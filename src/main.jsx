@@ -2,7 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import App, { demoSource } from "../AgencyWorkspace.jsx";
 import { createSupabaseSource } from "../workspaceData.js";
-import { supabase, supabaseConfig, supabaseConfigError } from "./supabase.js";
+import { authCallback, supabase, supabaseConfig, supabaseConfigError } from "./supabase.js";
 import "./index.css";
 
 const root = createRoot(document.getElementById("root"));
@@ -32,7 +32,7 @@ if (authDemo) {
 } else if (supabaseConfigError) {
   root.render(<p style={{ fontFamily: "system-ui", padding: 24, color: "#b91c1c" }}>{supabaseConfigError}</p>);
 } else {
-  const source = createSupabaseSource(supabase, { storage: supabaseConfig });
+  const source = createSupabaseSource(supabase, { storage: supabaseConfig, callback: authCallback });
   root.render(
     <React.StrictMode>
       <App source={source} />

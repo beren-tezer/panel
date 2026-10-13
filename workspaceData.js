@@ -31,6 +31,7 @@
 import { createSupabaseBrandKit } from "./brandKit.js";
 import { signedInWithEmailLink } from "./passwords.js";
 import { rowToAgreementText } from "./agreement.js";
+import { CALLBACK_PATH, PASSWORD_TYPES, clearNeedsPassword, markNeedsPassword, needsPassword } from "./authCallback.js";
 import { CONTENT_BUCKET, MAX_CONTENT_BYTES, latestVersion, pendingRequest, validateContentFile } from "./approvals.js";
 import {
   checklistError, createSupabaseChecklist, currentChecklist, incompleteMessage, isMissingRelation, itemsOf, missingForSubmit,
@@ -321,7 +322,12 @@ const CHECKLIST_LIVE_TABLES = {
 };
 const rowKey = (table, r) => (table === "brand_members" ? membershipId(r.brand_id, r.user_id) : r.id);
 
-export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, storage = {} } = {}) {
+export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, storage = {}, callback = null } = {}) {
+  /* E-posta bağlantısı dönüşü (authCallback.js). #access_token ile gelen davet / sıfırlama oturumunu supabase-js kurar;
+     ilk yüklemede bu kullanıcı "şifresini belirlemeli" olarak işaretlenir. ?token_hash ile geleni completeCallback doğrular. */
+  let markOnLoad = !!(callback && callback.hasSession && !callback.tokenHash && !callback.error && PASSWORD_TYPES.includes(callback.type));
+  let callbackPromise = null;
+  const inviteRedirect = () => (typeof window !== "undefined" ? window.location.origin + CALLBACK_PATH : undefined);
   const must = ({ data, error }) => { if (error) throw error; return data; };
 
   /* Kendi yazdığımız satırların canlı güncelleme yankısı, yerel olarak daha yeni bir değeri
@@ -399,9 +405,20 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
 
   const invokeError = async (error) => {
     let message = error?.message || "İşlem tamamlanamadı.";
-    try { const body = await error.context.json(); if (body?.error) message = body.error; } catch { /* gövde yok */ }
-    return new Error(message);
+    let code = null;
+    try { const body = await error.context.json(); if (body?.error) message = body.error; code = body?.code || null; } catch { /* gövde yok */ }
+    if (!code && /failed to send a request|fetch/i.test(message)) message = "Davet servisine ulaşılamadı (invite-user fonksiyonu yayında mı?). Bağlantınızı kontrol edip tekrar deneyin.";
+    return Object.assign(new Error(message), { code });
   };
+  /* invite-user (Edge Function; service_role yalnızca sunucuda). Hata varsa açık mesajla fırlatır — başarı sayılmaz. */
+  const invokeUsers = async (body) => {
+    const { data, error } = await supabase.functions.invoke("invite-user", { body: { ...body, redirectTo: inviteRedirect() } });
+    if (error) throw await invokeError(error);
+    return data;
+  };
+  const invitePayload = (u, brandIds) => ({
+    name: u.name, email: u.email, role: u.role, title: u.title, company: u.company, permissions: u.permissions, brandIds,
+  });
 
   /* Kontrol listesi tabloları var mı (load sırasında belirlenir). Yoksa panel 006 öncesi gibi çalışır. */
   let checklistsAvailable = false;
@@ -534,14 +551,8 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
         break;
       }
       case "ADD_USER": {
-        const { error } = await supabase.functions.invoke("invite-user", {
-          body: {
-            name: action.user.name, email: action.user.email, role: action.user.role, title: action.user.title,
-            company: action.user.company, permissions: action.user.permissions, brandIds: action.brandIds,
-            redirectTo: typeof window !== "undefined" ? window.location.origin + window.location.pathname : undefined,
-          },
-        });
-        if (error) throw await invokeError(error);
+        // Panel davet sonucunu bekler (users.invite); bu yol yalnızca eski çağrılar için kalır.
+        await invokeUsers({ action: "invite", ...invitePayload(action.user, action.brandIds) });
         reload(); // gerçek kullanıcı kimliğiyle yeniden yükle
         return;
       }
@@ -674,6 +685,21 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
     /* "Şifremi Değiştir": şifreyle girilmiş oturumda önce mevcut şifre doğrulanır (açık unutulmuş oturumdan
        değiştirilemez); e-posta bağlantısıyla girilmişse sorulmaz (henüz şifresi olmayan kullanıcı ilk şifresini belirler). */
     account: {
+      /* Davet / şifre sıfırlama bağlantısıyla gelen kullanıcının ilk şifresi (/sifre-olustur). Mevcut şifre sorulmaz:
+         kullanıcı e-postasına erişimini bağlantıyla kanıtladı. */
+      async setInitialPassword(next) {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) throw new Error("Oturumunuz sona ermiş. Davet bağlantısını yeniden açın veya yöneticinizden yeni davet isteyin.");
+        const { error } = await supabase.auth.updateUser({ password: next });
+        if (error && !/same|different/i.test(error.message)) {
+          if (/weak|short|length|characters|pwned/i.test(error.message)) throw Object.assign(new Error("Şifre yeterince güçlü değil. Daha uzun ve tahmin edilmesi zor bir şifre seçin."), { field: "next" });
+          if (/reauth|recent|nonce/i.test(error.message)) throw new Error("Bağlantının oturumu çok eski. Yöneticinizden yeni bir davet / sıfırlama bağlantısı isteyin.");
+          if (error.status === 429 || /rate limit|too many/i.test(error.message)) throw new Error("Çok fazla deneme yapıldı. Birkaç dakika sonra tekrar deneyin.");
+          throw new Error("Şifre kaydedilemedi. Bağlantınızı kontrol edip tekrar deneyin.");
+        }
+        // "Yeni şifre eskisiyle aynı" (sıfırlamada eski şifresini girdiyse): şifresi zaten bu — akış tamamlanır.
+        clearNeedsPassword(session.user.id);
+      },
       async passwordContext() {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) throw new Error("Oturumunuz sona ermiş. Tekrar giriş yapın.");
@@ -698,7 +724,31 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
       },
     },
 
+    /* Kullanıcılar & Yetkiler: davet, yeniden davet, şifre sıfırlama, davet durumu — hepsi sunucuda yetki denetimiyle. */
+    users: {
+      invite: (user, brandIds) => invokeUsers({ action: "invite", ...invitePayload(user, brandIds) }),
+      resend: (userId) => invokeUsers({ action: "resend", userId }),
+      reset: (userId) => invokeUsers({ action: "reset", userId }),
+      async status() { const res = await invokeUsers({ action: "status" }); return res?.users || []; },
+    },
+
     auth: {
+      // Adresten okunan e-posta dönüşü (yoksa null) ve ?token_hash doğrulaması (bir kez; React StrictMode çift çağrısına dayanıklı).
+      callback,
+      completeCallback() {
+        if (!callback?.tokenHash) return Promise.resolve();
+        if (!callbackPromise) {
+          callbackPromise = (async () => {
+            const type = callback.type === "magiclink" || !callback.type ? "email" : callback.type;
+            const { data, error } = await supabase.auth.verifyOtp({ token_hash: callback.tokenHash, type });
+            // Jeton adreste kalmaz (yenilemede tekrar denenmez; tarayıcı geçmişine düşmez).
+            try { window.history.replaceState(window.history.state, "", CALLBACK_PATH); } catch { /* tarayıcı dışı */ }
+            if (error) throw Object.assign(new Error(error.message), { errorCode: error.code || "otp_expired", errorDescription: error.message });
+            if (PASSWORD_TYPES.includes(callback.type) && data?.user) markNeedsPassword(data.user.id);
+          })();
+        }
+        return callbackPromise;
+      },
       signInWithPassword: async (email, password) => {
         const { error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
         if (!error) return;
@@ -763,6 +813,7 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) { currentUserId = null; throw new AuthRequiredError(); }
       currentUserId = session.user.id;
+      if (markOnLoad) { markNeedsPassword(session.user.id); markOnLoad = false; }
 
       // Kontrol listesi tabloları yoksa (006 çalıştırılmamış) panel onlarsız açılır.
       const optional = (p) => p.catch((err) => { if (isMissingRelation(err)) return null; throw err; });
@@ -824,6 +875,8 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
           features: { checklists: checklistsAvailable, approvals: approvalsAvailable },
           agreement,
           agreementText: rowToAgreementText(agreementTextRow),
+          // Davet / sıfırlama bağlantısıyla geldi, şifresini henüz belirlemedi → /sifre-olustur.
+          needsPassword: needsPassword(me.id),
         },
       };
     },

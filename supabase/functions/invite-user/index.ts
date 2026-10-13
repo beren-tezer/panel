@@ -1,15 +1,13 @@
-// Supabase Edge Function: invite-user
+// Supabase Edge Function: invite-user  (adı geriye uyumluluk için korunur — artık DAVET E-POSTASI GÖNDERMEZ)
 // Kullanıcılar & Yetkiler ekranı bu fonksiyonu çağırır. Yalnızca aktif admin çağırabilir (rol veritabanından okunur;
 // istemcinin gönderdiği hiçbir bilgi yetki için kullanılmaz). service_role anahtarı yalnızca burada, sunucuda kullanılır.
 //
-//   action: "invite" (varsayılan) → yeni kullanıcı: davet e-postası + rol / izin / marka. Daveti henüz açılmamış bir
-//                                   e-posta için tekrar çağrılırsa aynı kullanıcıya yeniden davet gider (mükerrer kayıt oluşmaz).
-//   action: "resend"  { userId }  → daveti henüz kabul edilmemiş kullanıcıya yeni davet bağlantısı.
-//   action: "reset"   { userId }  → hesabını etkinleştirmiş kullanıcıya şifre sıfırlama bağlantısı (davetten ayrı senaryo).
-//   action: "status"              → kullanıcıların davet durumu (e-posta onaylandı mı, son giriş) — yalnızca liste rozetleri için.
+//   action: "create" (varsayılan) → yönetici e-posta + şifre belirler; hesap e-postası onaylı oluşturulur, hiçbir e-posta
+//                                   gitmez. Kullanıcı hemen bu e-posta ve şifreyle giriş yapabilir. Rol / izin / marka kaydedilir.
+//   action: "set_password" { userId, password } → yönetici mevcut kullanıcıya yeni şifre belirler (e-posta gitmez).
 //
+// SMTP gerekmez. Şifre hiçbir yerde kaydedilmez / loglanmaz; yalnızca Supabase Auth'ta (bcrypt özeti) saklanır.
 // Yayınlama:  supabase functions deploy invite-user   (veya Dashboard → Edge Functions → invite-user → kodu yapıştır → Deploy)
-// (SUPABASE_URL ve SUPABASE_SERVICE_ROLE_KEY Supabase tarafından otomatik sağlanır.)
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const cors = {
@@ -24,36 +22,24 @@ const ROLES = ["admin", "employee", "client"];
 // rbac.js TOGGLEABLE_PERMISSIONS ile aynı liste (eksik izin sessizce düşer — bu yüzden ikisi birlikte güncellenmeli).
 const PERMISSIONS = ["canViewContent", "canEditContent", "canViewTasks", "canUpdateTasks", "canViewBrandFiles", "canAccessApprovals", "canEditBrandKit", "canManageChecklists"];
 
-/* Davet / sıfırlama bağlantısının döneceği adres: yalnızca <origin>/auth/callback kabul edilir (https veya localhost).
-   Supabase ayrıca Authentication → URL Configuration → Redirect URLs listesini uygular; listede yoksa Site URL kullanılır. */
-function callbackUrl(raw: unknown): string | undefined {
-  try {
-    const u = new URL(String(raw || ""));
-    const local = u.hostname === "localhost" || u.hostname === "127.0.0.1";
-    if (u.protocol !== "https:" && !(local && u.protocol === "http:")) return undefined;
-    return `${u.origin}/auth/callback`;
-  } catch { return undefined; }
+// passwords.js validatePassword ile aynı kural (tarayıcı kontrolü atlanabilir; sunucu yeniden denetler).
+const MIN_PASSWORD = 8;
+const MAX_PASSWORD = 72;
+function passwordProblem(p: string): string | null {
+  if (p.length < MIN_PASSWORD) return `Şifre en az ${MIN_PASSWORD} karakter olmalı.`;
+  if (p.length > MAX_PASSWORD) return `Şifre en fazla ${MAX_PASSWORD} karakter olabilir.`;
+  if (!p.trim()) return "Şifre yalnızca boşluktan oluşamaz.";
+  if (!/[A-Za-zÇĞİÖŞÜçğıöşü]/.test(p) || !/\d/.test(p)) return "Şifre en az bir harf ve bir rakam içermeli.";
+  return null;
 }
 
-/* GoTrue hatası → açık Türkçe mesaj. E-posta gönderilemediyse bunu asla "başarılı" saymayız. */
-function authFailure(err: { message?: string; status?: number; code?: string } | null, what: "invite" | "reset") {
+function authFailure(err: { message?: string; status?: number; code?: string } | null) {
   const msg = err?.message || "";
   const code = err?.code || "";
-  if (code === "over_email_send_rate_limit" || /email rate limit/i.test(msg)) {
-    return fail("email_rate_limit", "E-posta gönderim sınırı aşıldı. Supabase'in yerleşik e-posta servisi saatte yalnızca birkaç e-posta gönderir; özel SMTP ayarlayın veya bir süre sonra tekrar deneyin.", 429);
-  }
-  if (err?.status === 429 || /security purposes|only request this after/i.test(msg)) {
-    return fail("too_soon", "Bu kişiye az önce e-posta gönderildi. Yaklaşık bir dakika bekleyip tekrar deneyin.", 429);
-  }
-  if (code === "email_exists" || /already.*registered|already exists/i.test(msg)) {
-    return fail("already_active", "Bu e-posta ile hesabını etkinleştirmiş bir kullanıcı var. Şifresini unuttuysa listeden “Şifre sıfırlama bağlantısı gönder”i kullanın.", 409);
-  }
-  if (/error sending .*email/i.test(msg) || code === "unexpected_failure" || (err?.status ?? 0) >= 500) {
-    return fail("email_failed", what === "invite"
-      ? "Davet e-postası gönderilemedi; kullanıcı oluşturulmadı. Supabase'de özel SMTP ayarlı değilse e-posta yalnızca proje ekibi adreslerine gider (Authentication → Emails → SMTP Settings). Ayrıntı: Supabase → Logs → Auth."
-      : "Şifre sıfırlama e-postası gönderilemedi. SMTP ayarlarını kontrol edin (Authentication → Emails → SMTP Settings). Ayrıntı: Supabase → Logs → Auth.", 502);
-  }
-  return fail("auth_error", msg || "İşlem tamamlanamadı.", 400);
+  if (code === "weak_password" || /weak|pwned|password should/i.test(msg)) return fail("weak_password", "Şifre Supabase güvenlik kurallarına uymuyor. Daha uzun ve tahmin edilmesi zor bir şifre seçin.", 400);
+  if (code === "email_exists" || /already.*registered|already exists/i.test(msg)) return fail("already_exists", "Bu e-posta ile kayıtlı bir kullanıcı var. Listeden o kullanıcıya “Şifre Belirle” ile yeni şifre verebilirsiniz.", 409);
+  if (code === "email_address_invalid" || /invalid.*email|email.*invalid/i.test(msg)) return fail("invalid_email", "E-posta adresi geçersiz.", 400);
+  return fail("auth_error", msg || "Kullanıcı oluşturulamadı.", (err?.status ?? 0) >= 500 ? 502 : 400);
 }
 
 Deno.serve(async (req) => {
@@ -71,40 +57,23 @@ Deno.serve(async (req) => {
 
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return json({ error: "Geçersiz istek gövdesi." }, 400); }
-  const action = String(body.action || "invite");
-  const redirectTo = callbackUrl(body.redirectTo);
+  const action = String(body.action || "create");
+  const password = typeof body.password === "string" ? body.password : "";
 
-  /* ── Davet durumu (liste rozetleri) ── */
-  if (action === "status") {
-    const users: { id: string; confirmed: boolean; invitedAt: string | null; lastSignInAt: string | null }[] = [];
-    for (let page = 1; page <= 20; page++) {
-      const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
-      if (error) return fail("auth_error", error.message, 500);
-      for (const u of data.users) users.push({ id: u.id, confirmed: !!u.email_confirmed_at, invitedAt: u.invited_at || null, lastSignInAt: u.last_sign_in_at || null });
-      if (data.users.length < 200) break;
-    }
-    return json({ users });
+  /* ── Mevcut kullanıcıya yönetici tarafından yeni şifre ── */
+  if (action === "set_password") {
+    const userId = String(body.userId || "");
+    const bad = passwordProblem(password);
+    if (bad) return fail("weak_password", bad, 400);
+    // E-posta onayı da verilir: daha önce davet edilip bağlantıyı hiç açmamış kullanıcı da bu şifreyle girebilir.
+    const { error } = await admin.auth.admin.updateUserById(userId, { password, email_confirm: true });
+    if (error) return /not.*found/i.test(error.message) ? fail("not_found", "Kullanıcı bulunamadı.", 404) : authFailure(error);
+    return json({ id: userId });
   }
 
-  /* ── Mevcut kullanıcı: yeniden davet / şifre sıfırlama ── */
-  if (action === "resend" || action === "reset") {
-    const { data: found, error: findError } = await admin.auth.admin.getUserById(String(body.userId || ""));
-    if (findError || !found?.user?.email) return fail("not_found", "Kullanıcı bulunamadı.", 404);
-    const user = found.user;
-    if (action === "resend") {
-      if (user.email_confirmed_at) return fail("already_active", "Bu kullanıcı davetini kabul etmiş. Giriş yapamıyorsa “Şifre sıfırlama bağlantısı gönder”i kullanın.", 409);
-      // Onaylanmamış kullanıcıya inviteUserByEmail yeni bir bağlantı gönderir (yeni kullanıcı oluşturmaz; eski bağlantı geçersizleşir).
-      const { error } = await admin.auth.admin.inviteUserByEmail(user.email!, { redirectTo });
-      return error ? authFailure(error, "invite") : json({ id: user.id, sent: "invite" });
-    }
-    if (!user.email_confirmed_at) return fail("pending_invite", "Bu kullanıcı davetini henüz kabul etmedi. Şifre sıfırlama yerine “Daveti yeniden gönder”i kullanın.", 409);
-    const { error } = await admin.auth.resetPasswordForEmail(user.email!, { redirectTo });
-    return error ? authFailure(error, "reset") : json({ id: user.id, sent: "reset" });
-  }
+  if (action !== "create" && action !== "invite") return json({ error: "Geçersiz işlem." }, 400);
 
-  if (action !== "invite") return json({ error: "Geçersiz işlem." }, 400);
-
-  /* ── Yeni kullanıcı daveti ── */
+  /* ── Yeni kullanıcı: e-posta + şifre (e-posta gönderilmez) ── */
   const name = String(body.name || "").trim();
   const email = String(body.email || "").trim().toLowerCase();
   const role = String(body.role || "");
@@ -114,29 +83,37 @@ Deno.serve(async (req) => {
   if (!/^\S+@\S+\.\S+$/.test(email)) return json({ error: "Geçerli bir e-posta adresi girin." }, 400);
   if (!ROLES.includes(role)) return json({ error: "Geçersiz rol." }, 400);
   if (role === "client" && !brandIds.length) return json({ error: "Müşteri için en az bir marka seçin." }, 400);
+  const bad = passwordProblem(password);
+  if (bad) return fail("weak_password", bad, 400);
 
-  // Aynı e-posta daha önce eklendiyse: hesabını etkinleştirmişse yeni davet yok (ayrı senaryo: şifre sıfırlama);
-  // daveti bekliyorsa aşağıdaki çağrı aynı kullanıcıya yeniden davet gönderir — ikinci bir kullanıcı oluşmaz.
-  const { data: existing } = await admin.from("profiles").select("id").eq("email", email).maybeSingle();
-  if (existing) {
-    const { data: found } = await admin.auth.admin.getUserById(existing.id);
-    if (found?.user?.email_confirmed_at) return fail("already_active", "Bu e-posta ile hesabını etkinleştirmiş bir kullanıcı var. Şifresini unuttuysa listeden “Şifre sıfırlama bağlantısı gönder”i kullanın.", 409);
-  }
-
-  // GoTrue kullanıcıyı ve e-postayı tek işlemde ele alır: e-posta gönderilemezse kullanıcı kaydı geri alınır.
-  const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
+  let id: string;
+  const { data: created, error: createError } = await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true, // onay e-postası yok; hesap hemen giriş yapabilir
     // Yalnızca görünen ad. Rol buradan okunmaz (008: yeni kullanıcı pasif müşteri olarak oluşur, rolü aşağıda atanır).
-    data: { full_name: name },
-    redirectTo,
+    user_metadata: { full_name: name },
   });
-  if (inviteError || !invited?.user) return authFailure(inviteError, "invite");
-  const id = invited.user.id;
+  if (createError || !created?.user) {
+    if (!(createError?.code === "email_exists" || /already.*registered|already exists/i.test(createError?.message || ""))) return authFailure(createError);
+    // Aynı e-posta zaten var. Yalnızca yarım kalmış bir kayıt tamamlanır (önceki deneme profil adımında kaldı ya da eski
+    // davet sisteminden kalan, bağlantısı hiç açılmamış hesap). Kullanılan bir hesabın şifresi / rolü burada değiştirilmez.
+    const { data: profile } = await admin.from("profiles").select("id, active").eq("email", email).maybeSingle();
+    const { data: found } = profile ? await admin.auth.admin.getUserById(profile.id) : { data: null };
+    const unused = found?.user && !found.user.last_sign_in_at && (!found.user.email_confirmed_at || profile?.active === false);
+    if (!unused) return authFailure(createError);
+    const { error: pwError } = await admin.auth.admin.updateUserById(found!.user!.id, { password, email_confirm: true });
+    if (pwError) return authFailure(pwError);
+    id = found!.user!.id;
+  } else {
+    id = created.user.id;
+  }
 
   // Önce marka atamaları, en son aktifleştirme: herhangi bir adım başarısız olursa kullanıcı pasif kalır (hiçbir şey göremez).
   // Tekrar denemede aynı satırlar üzerine yazılır (upsert) — çift kayıt oluşmaz.
   if (role !== "admin" && brandIds.length) {
     const { error: memberError } = await admin.from("brand_members").upsert(brandIds.map((brand_id) => ({ brand_id, user_id: id })));
-    if (memberError) return fail("save_failed", `Davet gönderildi ancak marka ataması kaydedilemedi: ${memberError.message}. Aynı bilgilerle tekrar deneyin.`, 500);
+    if (memberError) return fail("save_failed", `Hesap oluşturuldu ancak marka ataması kaydedilemedi: ${memberError.message}. Aynı bilgilerle tekrar deneyin.`, 500);
   }
 
   const { error: profileError } = await admin.from("profiles").update({
@@ -148,7 +125,7 @@ Deno.serve(async (req) => {
     email,
     active: true,
   }).eq("id", id);
-  if (profileError) return fail("save_failed", `Davet gönderildi ancak profil kaydedilemedi: ${profileError.message}. Aynı bilgilerle tekrar deneyin.`, 500);
+  if (profileError) return fail("save_failed", `Hesap oluşturuldu ancak profil kaydedilemedi: ${profileError.message}. Aynı bilgilerle tekrar deneyin.`, 500);
 
-  return json({ id, sent: "invite", resent: !!existing });
+  return json({ id });
 });

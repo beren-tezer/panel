@@ -3900,10 +3900,6 @@ function StatusDot({ active, labels = ["Aktif", "Pasif"] }) {
   );
 }
 
-function InvitePendingBadge() {
-  return <span data-invite-pending="" title="Davet bağlantısı henüz açılmadı" className="inline-flex items-center h-5 px-1.5 rounded-md border cw-10 font-semibold text-amber-700 bg-amber-50 border-amber-200">Davet bekliyor</span>;
-}
-
 function RoleBadge({ role }) {
   const cls = { admin: "text-slate-800 bg-slate-100 border-slate-300", employee: "text-sky-700 bg-sky-50 border-sky-200", client: "text-violet-700 bg-violet-50 border-violet-200" }[role] || "";
   return <span className={`inline-flex items-center h-5 px-1.5 rounded-md border cw-10 font-semibold ${cls}`}>{ROLE_LABELS[role] || role}</span>;
@@ -4658,6 +4654,69 @@ function BrandChecklist({ value, onChange, error }) {
   );
 }
 
+/* Yöneticinin belirlediği şifre. Panelde / veritabanı tablolarında saklanmaz; yalnızca Supabase Auth'a (bcrypt özeti) gider. */
+function strongPassword() {
+  const letters = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ", digits = "23456789";
+  const pick = (set) => set[globalThis.crypto.getRandomValues(new Uint32Array(1))[0] % set.length];
+  let p = "";
+  for (let i = 0; i < 10; i++) p += pick(letters + digits);
+  return `${p}${pick(digits)}${pick(letters)}`; // en az bir harf + bir rakam garantili (12 karakter)
+}
+const passwordErrors = ({ password, repeat }) => {
+  const e = validatePasswordChange({ next: password, repeat }, false);
+  return { ...(e.next ? { password: e.next } : {}), ...(e.repeat ? { repeat: e.repeat } : {}) };
+};
+function PasswordFields({ value, onChange, errors }) {
+  const [show, setShow] = useState(false);
+  const type = show ? "text" : "password";
+  return (
+    <>
+      <Field label="Şifre" error={errors.password}>
+        <input type={type} autoComplete="new-password" value={value.password} onChange={(e) => onChange({ password: e.target.value })} aria-label="Yeni kullanıcı şifresi" className={inputCls(errors.password)} />
+      </Field>
+      <Field label="Şifre (Tekrar)" error={errors.repeat}>
+        <input type={type} autoComplete="new-password" value={value.repeat} onChange={(e) => onChange({ repeat: e.target.value })} aria-label="Yeni kullanıcı şifresi (tekrar)" className={inputCls(errors.repeat)} />
+      </Field>
+      <div className="sm:col-span-2 flex flex-wrap items-center gap-x-4 gap-y-1.5">
+        <label className="inline-flex items-center gap-2 cw-12 text-slate-600 cursor-pointer select-none">
+          <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} className="h-4 w-4 accent-orange-600" />Şifreyi göster
+        </label>
+        <button type="button" onClick={() => { const p = strongPassword(); onChange({ password: p, repeat: p }); setShow(true); }} className="inline-flex items-center gap-1 cw-12 font-semibold text-orange-600 hover:text-orange-700">
+          <KeyRound size={13} />Güçlü şifre oluştur
+        </button>
+        <span className="cw-11 text-slate-500">En az {MIN_PASSWORD} karakter; en az bir harf ve bir rakam.</span>
+      </div>
+    </>
+  );
+}
+
+/* Yönetici mevcut kullanıcıya yeni şifre verir (şifresini unutan çalışan). E-posta gönderilmez. */
+function UserPasswordModal({ user, api, onClose, onDone }) {
+  const [form, setForm] = useState({ password: "", repeat: "" });
+  const [errors, setErrors] = useState({});
+  const [saving, setSaving] = useState(false);
+  const submit = async (e) => {
+    e.preventDefault();
+    if (saving) return;
+    const errs = passwordErrors(form);
+    setErrors(errs);
+    if (Object.keys(errs).length) return;
+    setSaving(true);
+    try { await api.setPassword(user.id, form.password); onDone(); }
+    catch (err) { setErrors({ form: err?.message || "Şifre kaydedilemedi." }); setSaving(false); }
+  };
+  return (
+    <Modal title="Şifre Belirle" subtitle={`${user.name} · ${user.email}`} onClose={onClose} width={480}
+      footer={<><Btn variant="secondary" onClick={onClose} disabled={saving}>İptal</Btn><Btn variant="primary" type="submit" form="cw-user-password" disabled={saving}>{saving ? "Kaydediliyor…" : <><KeyRound size={14} />Şifreyi Kaydet</>}</Btn></>}>
+      <form id="cw-user-password" onSubmit={submit} noValidate className="grid grid-cols-1 sm:grid-cols-2 gap-3.5" data-user-password="">
+        <p className="sm:col-span-2 cw-12 text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">Kullanıcı bundan sonra e-posta adresi ve bu şifreyle giriş yapar; eski şifresi geçersiz olur. E-posta gönderilmez — şifreyi kendisine güvenli bir kanaldan iletin.</p>
+        <PasswordFields value={form} errors={errors} onChange={(patch) => { setForm((f) => ({ ...f, ...patch })); setErrors({}); }} />
+        {errors.form && <p role="alert" className="sm:col-span-2 cw-12 text-red-700">{errors.form}</p>}
+      </form>
+    </Modal>
+  );
+}
+
 function UserModal({ userId, presetRole, onClose }) {
   const { state, dispatch, notify, userApi } = useWS();
   const [sending, setSending] = useState(false);
@@ -4671,7 +4730,10 @@ function UserModal({ userId, presetRole, onClose }) {
     company: existing?.company || "",
     brandIds: existing ? state.allMemberships.filter((m) => m.userId === existing.id).map((m) => m.brandId) : [],
     permissions: existing ? (Array.isArray(existing.permissions) ? existing.permissions : ROLE_DEFAULT_TOGGLES[existing.role]) : ROLE_DEFAULT_TOGGLES[presetRole || "employee"],
+    password: "",
+    repeat: "",
   }));
+  const withPassword = !existing && !!userApi;
   const [errors, setErrors] = useState({});
   const set = (k, v) => { setForm((f) => ({ ...f, [k]: v })); setErrors((e) => ({ ...e, [k]: "" })); };
   const setRole = (role) => setForm((f) => ({ ...f, role, permissions: ROLE_DEFAULT_TOGGLES[role] }));
@@ -4684,6 +4746,7 @@ function UserModal({ userId, presetRole, onClose }) {
     if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) next.email = "Geçerli bir e-posta adresi girin.";
     else if (state.allUsers.some((u) => u.id !== userId && (u.email || "").toLowerCase() === form.email.trim().toLowerCase())) next.email = "Bu e-posta ile kayıtlı bir kullanıcı var.";
     if (form.role === "client" && !form.brandIds.length) next.brandIds = "Müşteri için en az bir marka seçin.";
+    if (withPassword) Object.assign(next, passwordErrors(form));
     setErrors(next);
     if (Object.keys(next).length) return;
     const permissions = form.permissions.filter((p) => allowedToggles.includes(p));
@@ -4692,15 +4755,15 @@ function UserModal({ userId, presetRole, onClose }) {
       const ok = dispatch({ type: "UPDATE_USER", id: existing.id, patch: profile }) && dispatch({ type: "SET_USER_BRANDS", userId: existing.id, brandIds: form.role === "admin" ? [] : form.brandIds });
       if (ok) { notify(`“${profile.name}” güncellendi.`); onClose(); }
     } else if (userApi) {
-      // Canlı: davet sunucuda oluşturulur (rol / izin / marka orada kaydedilir). Sonuç gelmeden "oluşturuldu" denmez;
-      // hata olursa form açık kalır ve neden gösterilir.
+      // Canlı: hesap sunucuda e-posta + şifreyle, e-posta onaylı oluşturulur (davet / onay e-postası YOK); rol / izin / marka
+      // orada kaydedilir. Sonuç gelmeden "oluşturuldu" denmez; hata olursa form açık kalır ve neden gösterilir.
       setSending(true); setSendError("");
       try {
-        const res = await userApi.invite({ ...profile, email: form.email.trim().toLowerCase() }, form.role === "admin" ? [] : form.brandIds);
-        notify(res?.resent ? `“${profile.name}” için davet yeniden gönderildi.` : `“${profile.name}” için davet e-postası gönderildi.`);
+        await userApi.create({ ...profile, email: form.email.trim().toLowerCase() }, form.role === "admin" ? [] : form.brandIds, form.password);
+        notify(`“${profile.name}” oluşturuldu. ${form.email.trim().toLowerCase()} ve belirlediğiniz şifreyle hemen giriş yapabilir.`);
         onClose();
       } catch (err) {
-        setSendError(err?.message || "Davet gönderilemedi.");
+        setSendError(err?.message || "Kullanıcı oluşturulamadı.");
         setSending(false);
       }
     } else {
@@ -4713,12 +4776,13 @@ function UserModal({ userId, presetRole, onClose }) {
   };
   return (
     <Modal title={existing ? "Kullanıcıyı Düzenle" : "Kullanıcı Ekle"} subtitle={existing ? existing.email : "Kullanıcı rolüne göre yalnızca yetkili olduğu ekranları ve markaları görür."} onClose={onClose} width={640}
-      footer={<><Btn variant="secondary" onClick={onClose} disabled={sending}>İptal</Btn><Btn variant="primary" type="submit" form="cw-user-form" disabled={sending}>{existing ? <><Check size={14} />Kaydet</> : sending ? "Davet gönderiliyor…" : <><UserPlus size={14} />{userApi ? "Davet Gönder" : "Kullanıcı Oluştur"}</>}</Btn></>}>
-      {sendError && <p role="alert" data-invite-error="" className="mb-3 cw-12 text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{sendError}</p>}
-      {!existing && userApi && !sendError && <p className="mb-3 cw-12 text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">Kişiye davet e-postası gider. Bağlantıyla şifresini belirler ve yalnızca bu rolün yetkileriyle giriş yapar.</p>}
+      footer={<><Btn variant="secondary" onClick={onClose} disabled={sending}>İptal</Btn><Btn variant="primary" type="submit" form="cw-user-form" disabled={sending}>{existing ? <><Check size={14} />Kaydet</> : sending ? "Oluşturuluyor…" : <><UserPlus size={14} />Kullanıcı Oluştur</>}</Btn></>}>
+      {sendError && <p role="alert" data-user-error="" className="mb-3 cw-12 text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{sendError}</p>}
+      {withPassword && !sendError && <p className="mb-3 cw-12 text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">E-posta gönderilmez. Kişi bu e-posta ve belirlediğiniz şifreyle hemen giriş yapar ve yalnızca bu rolün yetkilerini görür. Şifreyi kendisine güvenli bir kanaldan iletin; isterse giriş yaptıktan sonra “Şifremi Değiştir” ile değiştirebilir.</p>}
       <form id="cw-user-form" onSubmit={submit} noValidate className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
         <Field label="Ad Soyad" error={errors.name}><input autoFocus value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="Örn. Ayşe Demir" className={inputCls(errors.name)} /></Field>
-        <Field label="E-posta" error={errors.email}><input type="email" value={form.email} disabled={!!existing} onChange={(e) => set("email", e.target.value)} placeholder="ad@sirket.com" className={`${inputCls(errors.email)} disabled:bg-slate-50 disabled:text-slate-500`} /></Field>
+        <Field label="E-posta" error={errors.email}><input type="email" autoComplete="off" value={form.email} disabled={!!existing} onChange={(e) => set("email", e.target.value)} placeholder="ad@sirket.com" className={`${inputCls(errors.email)} disabled:bg-slate-50 disabled:text-slate-500`} /></Field>
+        {withPassword && <PasswordFields value={form} errors={errors} onChange={(patch) => { setForm((f) => ({ ...f, ...patch })); setErrors((e) => ({ ...e, password: "", repeat: "" })); }} />}
         <div className="sm:col-span-2">
           <p className="cw-12 font-semibold text-slate-700 mb-1.5">Rol</p>
           <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Rol">
@@ -5174,26 +5238,8 @@ function AgreementAdminPage({ text, api, search }) {
 function UsersPage({ search }) {
   const { state, dispatch, notify, actor, userApi } = useWS();
   const [role, setRole] = useState("all");
-  // Davet durumu (Supabase Auth: e-posta bağlantısı açıldı mı). Alınamazsa rozetsiz devam edilir.
-  const [authStatus, setAuthStatus] = useState(null);
-  const [mailBusy, setMailBusy] = useState(null);
-  const userCount = state.allUsers.length;
-  useEffect(() => {
-    if (!userApi?.status) return undefined;
-    let alive = true;
-    userApi.status().then((list) => { if (alive) setAuthStatus(Object.fromEntries(list.map((x) => [x.id, x]))); }, () => {});
-    return () => { alive = false; };
-  }, [userApi, userCount]);
-  const invitePending = (u) => !!authStatus?.[u.id] && !authStatus[u.id].confirmed;
-  const sendMail = async (u, kind) => {
-    setMailBusy(u.id);
-    try {
-      await userApi[kind](u.id);
-      notify(kind === "resend" ? `${u.name} için yeni davet bağlantısı gönderildi (önceki bağlantı geçersiz).` : `${u.name} için şifre sıfırlama bağlantısı gönderildi.`);
-    } catch (err) {
-      notify(err?.message || "E-posta gönderilemedi.", "error");
-    } finally { setMailBusy(null); }
-  };
+  // Şifresini unutan kullanıcıya yönetici yeni şifre verir (e-posta gönderilmez).
+  const [passwordUser, setPasswordUser] = useState(null);
   const { open, node } = useManagementModals();
   const q = norm(search);
   const lastActivity = useMemo(() => {
@@ -5215,9 +5261,7 @@ function UsersPage({ search }) {
   const brandsCell = (u) => (u.role === "admin" ? <span className="cw-12 text-slate-500">Tüm markalar</span> : <BrandStack brandIds={brandIdsOf(u.id)} />);
   const actions = (u) => (
     <>
-      {userApi && authStatus?.[u.id] && (invitePending(u)
-        ? <IconAction icon={Send} label="Daveti yeniden gönder" tone="orange" disabled={mailBusy === u.id || u.active === false} onClick={() => sendMail(u, "resend")} />
-        : <IconAction icon={KeyRound} label="Şifre sıfırlama bağlantısı gönder" disabled={mailBusy === u.id || u.active === false || u.id === actor.id} onClick={() => sendMail(u, "reset")} />)}
+      {userApi?.setPassword && <IconAction icon={KeyRound} label="Şifre Belirle" disabled={u.id === actor.id} onClick={() => setPasswordUser(u)} />}
       <IconAction icon={Pencil} label="Düzenle" onClick={() => open({ kind: "user", userId: u.id })} />
       <IconAction icon={Layers} label="Marka Ata" tone="orange" disabled={u.role === "admin"} onClick={() => open({ kind: "user-brands", userId: u.id })} />
       <IconAction icon={u.active === false ? RotateCcw : X} label={u.active === false ? "Aktifleştir" : "Pasifleştir"} tone={u.active === false ? "default" : "danger"} disabled={u.id === actor.id} onClick={() => toggleActive(u)} />
@@ -5238,7 +5282,7 @@ function UsersPage({ search }) {
                   <td className="px-3 py-2.5 cw-12 text-slate-600">{u.email || "—"}</td>
                   <td className="px-3 py-2.5"><RoleBadge role={u.role} /></td>
                   <td className="px-3 py-2.5">{brandsCell(u)}</td>
-                  <td className="px-3 py-2.5"><span className="inline-flex items-center gap-1 flex-wrap"><StatusDot active={u.active !== false} />{invitePending(u) && <InvitePendingBadge />}</span></td>
+                  <td className="px-3 py-2.5"><StatusDot active={u.active !== false} /></td>
                   <td className="px-3 py-2.5 cw-12 text-slate-500 whitespace-nowrap">{lastActivity[u.id] ? fmtDateTime(lastActivity[u.id]) : "Henüz yok"}</td>
                   <td className="px-2 py-2.5 whitespace-nowrap">{actions(u)}</td>
                 </tr>
@@ -5252,13 +5296,17 @@ function UsersPage({ search }) {
         {list.map((u) => (
           <div key={u.id} className="bg-white border border-slate-200 rounded-xl p-3">
             <div className="flex items-center gap-2.5"><Avatar userId={u.id} size={32} /><div className="flex-1 min-w-0"><p className="cw-13 font-semibold text-slate-900 truncate">{u.name}</p><p className="cw-11 text-slate-500 truncate">{u.email}</p></div><RoleBadge role={u.role} /></div>
-            <div className="mt-2 flex items-center justify-between gap-2">{brandsCell(u)}<span className="inline-flex items-center gap-1">{invitePending(u) && <InvitePendingBadge />}<StatusDot active={u.active !== false} /></span></div>
+            <div className="mt-2 flex items-center justify-between gap-2">{brandsCell(u)}<StatusDot active={u.active !== false} /></div>
             <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between"><span className="cw-11 text-slate-400">{lastActivity[u.id] ? fmtDateTime(lastActivity[u.id]) : "Aktivite yok"}</span><span>{actions(u)}</span></div>
           </div>
         ))}
         {!list.length && <p className="cw-13 text-slate-500 text-center py-8">Eşleşen kullanıcı yok.</p>}
       </div>
       {node}
+      {passwordUser && userApi?.setPassword && (
+        <UserPasswordModal user={passwordUser} api={userApi} onClose={() => setPasswordUser(null)}
+          onDone={() => { notify(`${passwordUser.name} için yeni şifre kaydedildi. Bundan sonra bu şifreyle giriş yapar.`); setPasswordUser(null); }} />
+      )}
     </div>
   );
 }
@@ -7892,7 +7940,7 @@ function LoginScreen({ auth }) {
             {busy ? (mode === "password" ? "Giriş yapılıyor…" : "Gönderiliyor…") : mode === "password" ? "Giriş Yap" : "Giriş bağlantısı gönder"}
           </Btn>
           <div className="flex flex-wrap items-center justify-between gap-2 cw-11">
-            <span className="text-slate-400">{mode === "password" ? "Şifrenizi unuttuysanız ajans yöneticinizden şifre sıfırlama bağlantısı isteyin." : "Yalnızca kayıtlı kullanıcılar giriş yapabilir."}</span>
+            <span className="text-slate-400">{mode === "password" ? "Şifrenizi unuttuysanız ajans yöneticinizden yeni şifre isteyin." : "Yalnızca kayıtlı kullanıcılar giriş yapabilir."}</span>
             {auth.sendLink && (
               <button type="button" onClick={() => { setMode(mode === "password" ? "link" : "password"); setStatus({ name: "idle" }); }} className="font-semibold text-orange-600 hover:text-orange-700">
                 {mode === "password" ? "E-postayla giriş bağlantısı gönder" : "Şifreyle giriş yap"}
@@ -8156,9 +8204,9 @@ export default function App({ source = demoSource }) {
   // Davet / sıfırlama bağlantısıyla gelip şifresini henüz belirlememiş kullanıcı (yalnızca gerçek oturum sahibi).
   const needsPassword = routePhase === "ready" && !!state.needsPassword && !!source.account?.setInitialPassword;
   const route = resolveRoute({ path: window.location.pathname, search: window.location.search, phase: routePhase, role: actor?.role || null, agreementAccepted, needsPassword });
-  // Davet ve kullanıcı e-postaları (yalnızca canlı kaynak). Davetten sonra liste yeniden yüklenir.
+  // Yönetici kullanıcıyı şifreyle oluşturur / şifre belirler (yalnızca canlı kaynak). Oluşturduktan sonra liste yeniden yüklenir.
   const userApi = useMemo(() => (source.users
-    ? { ...source.users, invite: async (...args) => { const res = await source.users.invite(...args); await reload(); return res; } }
+    ? { ...source.users, create: async (...args) => { const res = await source.users.create(...args); await reload(); return res; } }
     : null), [source, reload]);
   const [staffFocus, setStaffFocus] = useState(null);
   useEffect(() => {

@@ -1,6 +1,6 @@
-// Çalışan daveti → bağlantı → ilk şifre → sözleşme → panel — tarayıcı testleri (yalnızca geliştirme: ?authdemo, bellek içi oturum).
+// Yöneticinin şifreyle kullanıcı eklemesi / şifre belirlemesi + eski e-posta bağlantıları (/auth/callback) — tarayıcı testleri (yalnızca geliştirme: ?authdemo, bellek içi oturum).
 //   npm run test:ui:invite
-// Gerçek e-posta gönderimi, Supabase jeton doğrulaması ve SMTP bu testte YOKTUR; canlı / geliştirme projesinde ayrıca doğrulanır.
+// Gerçek Supabase Auth / Edge Function bu testte YOKTUR (bellek içi benzetim); canlıda ayrıca doğrulanır.
 import { startHarness, waitFor, sleep } from "./ui-harness.mjs";
 
 const h = await startHarness({ port: 5187, debugPort: 9341 });
@@ -23,35 +23,52 @@ const setPw = (a, b) => page(`const f = $("[data-set-password]"); setValue($("in
 try {
   await viewport(1440, 900);
 
-  /* ── Admin: davet formu ── */
+  /* ── Admin: şifreyle kullanıcı oluşturma (e-posta yok) ── */
   await go("/login?authdemo");
   await login("admin@demo.test", "Demo1234");
   await waitFor(() => page(`return location.pathname === "/dashboard";`), 8000);
   await page(`byText("aside button", "Kullanıcılar & Yetkiler").click(); return true;`);
   await waitFor(() => page(`return $("main").textContent.includes("Kullanıcılar & Yetkiler");`), 4000);
-  check("Davet bekleyen kullanıcı listede işaretlenir", await waitFor(() => page(`return $$("[data-invite-pending]").length >= 1;`), 4000).catch(() => false));
-  check("Davet bekleyende “Daveti yeniden gönder”, diğerlerinde “Şifre sıfırlama” (ayrı işlemler)",
-    await page(`return !!$("button[aria-label='Daveti yeniden gönder']") && !!$("button[aria-label='Şifre sıfırlama bağlantısı gönder']");`));
-  await page(`$("button[aria-label='Daveti yeniden gönder']").click(); return true;`);
-  check("Yeniden davet gönderilir", await waitFor(() => page(`return (globalThis.__cwMails || []).includes("resend:u3") && document.body.textContent.includes("yeni davet bağlantısı gönderildi");`), 3000).catch(() => false));
-  await page(`globalThis.__cwSimulateInviteError = "E-posta gönderim sınırı aşıldı."; $$("button[aria-label='Şifre sıfırlama bağlantısı gönder']").find((x) => !x.disabled).click(); return true;`);
-  check("Sıfırlama e-postası gönderilemezse hata gösterilir (başarı denmez)", await waitFor(() => has("E-posta gönderim sınırı aşıldı."), 3000).catch(() => false) && !(await page(`return (globalThis.__cwMails || []).some((m) => m.startsWith("reset:"));`)));
+  check("Davet / e-posta işlemleri kaldırıldı", await page(`return !$("[data-invite-pending]") && !$("button[aria-label='Daveti yeniden gönder']") && !$("button[aria-label='Şifre sıfırlama bağlantısı gönder']");`));
 
-  const openInvite = async () => {
-    await page(`exact("button", "Kullanıcı Ekle").click(); return true;`);
-    await waitFor(() => page(`return !!$("#cw-user-form");`), 3000);
-    await page(`const f = $("#cw-user-form"); const i = $$("input", f); setValue(i[0], "Deniz Kaya"); setValue(i[1], "deniz@ornek.com"); return true;`);
-  };
-  await openInvite();
-  check("Davet formunda rol varsayılanı Çalışan; buton “Davet Gönder”", await page(`return $("[role='radio'][aria-checked='true']").textContent.includes("Çalışan") && !!exact("button", "Davet Gönder");`));
-  await page(`globalThis.__cwSimulateInviteError = "Davet e-postası gönderilemedi; kullanıcı oluşturulmadı. Supabase'de özel SMTP ayarlı değilse…"; exact("button", "Davet Gönder").click(); return true;`);
-  await waitFor(() => page(`return !!$("[data-invite-error]");`), 3000).catch(() => {});
-  check("Senaryo: davet e-postası gönderilemezse form açık kalır, neden gösterilir, “oluşturuldu” denmez",
-    await page(`return !!$("#cw-user-form") && $("[data-invite-error]").textContent.includes("kullanıcı oluşturulmadı") && !document.body.textContent.includes("davet e-postası gönderildi");`));
-  check("Girilen bilgiler korunur (tekrar denenebilir)", await page(`return $$("#cw-user-form input")[1].value === "deniz@ornek.com";`));
-  await page(`exact("button", "Davet Gönder").click(); return true;`);
-  check("Tekrar denemede davet gönderilir; form kapanır", await waitFor(() => page(`return !$("#cw-user-form") && document.body.textContent.includes("“Deniz Kaya” için davet e-postası gönderildi.");`), 4000).catch(() => false));
-  check("Davet sunucuya tek kez gider (çift tıklama / tekrar mükerrer oluşturmaz)", await page(`return (globalThis.__cwInvites || []).filter((e) => e === "deniz@ornek.com").length === 1;`));
+  const fillUser = (pw, rep) => page(`const f = $("#cw-user-form"); const i = $$("input", f); setValue(i[0], "Deniz Kaya"); setValue(i[1], "deniz@ornek.com");
+    setValue($("input[aria-label='Yeni kullanıcı şifresi']", f), ${JSON.stringify(pw)}); setValue($("input[aria-label='Yeni kullanıcı şifresi (tekrar)']", f), ${JSON.stringify(rep)}); return true;`);
+  await page(`exact("button", "Kullanıcı Ekle").click(); return true;`);
+  await waitFor(() => page(`return !!$("#cw-user-form");`), 3000);
+  check("Formda şifre + tekrar alanı; rol varsayılanı Çalışan; e-posta gönderilmeyeceği yazıyor",
+    await page(`return !!$("input[aria-label='Yeni kullanıcı şifresi']") && !!$("input[aria-label='Yeni kullanıcı şifresi (tekrar)']") && $("[role='radio'][aria-checked='true']").textContent.includes("Çalışan") && document.body.textContent.includes("E-posta gönderilmez.");`));
+  check("Şifre alanları gizli (type=password)", await page(`return $("input[aria-label='Yeni kullanıcı şifresi']").type === "password";`));
+  await fillUser("kisa", "kisa");
+  await page(`exact("button", "Kullanıcı Oluştur").click(); return true;`);
+  check("Zayıf şifreyle kullanıcı oluşturulmaz", await waitFor(() => page(`return $("#cw-user-form").textContent.includes("en az 8");`), 2000).catch(() => false) && !(await page(`return !!globalThis.__cwCreated;`)));
+  await fillUser("Calisan2026", "Calisan2025");
+  await page(`exact("button", "Kullanıcı Oluştur").click(); return true;`);
+  check("Şifreler eşleşmezse oluşturulmaz", await waitFor(() => page(`return $("#cw-user-form").textContent.includes("Şifreler eşleşmiyor.");`), 2000).catch(() => false) && !(await page(`return !!globalThis.__cwCreated;`)));
+  await page(`byText("#cw-user-form button", "Güçlü şifre oluştur").click(); return true;`);
+  check("“Güçlü şifre oluştur” iki alanı da doldurur ve gösterir", await page(`const a = $("input[aria-label='Yeni kullanıcı şifresi']"), b = $("input[aria-label='Yeni kullanıcı şifresi (tekrar)']");
+    return a.value.length === 12 && a.value === b.value && /\\d/.test(a.value) && /[a-zA-Z]/.test(a.value) && a.type === "text";`));
+  await fillUser("Calisan2026", "Calisan2026");
+  await page(`globalThis.__cwSimulateInviteError = "Bu e-posta ile kayıtlı bir kullanıcı var."; exact("button", "Kullanıcı Oluştur").click(); return true;`);
+  await waitFor(() => page(`return !!$("[data-user-error]");`), 3000).catch(() => {});
+  check("Sunucu hatasında form açık kalır, neden gösterilir, “oluşturuldu” denmez",
+    await page(`return !!$("#cw-user-form") && $("[data-user-error]").textContent.includes("kayıtlı bir kullanıcı var") && !document.body.textContent.includes("oluşturuldu.");`));
+  await page(`exact("button", "Kullanıcı Oluştur").click(); return true;`);
+  check("Kullanıcı şifresiyle oluşturulur; form kapanır", await waitFor(() => page(`return !$("#cw-user-form") && document.body.textContent.includes("“Deniz Kaya” oluşturuldu.");`), 4000).catch(() => false));
+  check("Sunucuya e-posta, rol ve şifre tek istekte gider",
+    await page(`const c = globalThis.__cwCreated || []; return c.length === 1 && c[0].email === "deniz@ornek.com" && c[0].role === "employee" && c[0].password === "Calisan2026";`));
+
+  /* ── Admin: mevcut çalışana şifre belirleme → çalışan doğrudan giriş yapar ── */
+  check("Kendi hesabında “Şifre Belirle” kapalı", await page(`return $$("button[aria-label='Şifre Belirle']").some((b) => b.disabled);`));
+  await page(`const row = $$("tr").find((r) => r.textContent.includes("ayse@example.com")); $("button[aria-label='Şifre Belirle']", row).click(); return true;`);
+  await waitFor(() => page(`return !!$("[data-user-password]");`), 3000);
+  await page(`const f = $("[data-user-password]"); setValue($("input[aria-label='Yeni kullanıcı şifresi']", f), "Yeni2026x"); setValue($("input[aria-label='Yeni kullanıcı şifresi (tekrar)']", f), "Yeni2026x"); exact("button", "Şifreyi Kaydet").click(); return true;`);
+  check("Yönetici şifre belirler (e-posta gönderilmez)", await waitFor(() => page(`return !$("[data-user-password]") && document.body.textContent.includes("için yeni şifre kaydedildi");`), 3000).catch(() => false));
+  await logout();
+  await login("calisan@demo.test", "Demo1234");
+  check("Eski şifre geçersiz", await waitFor(() => has("E-posta veya şifre hatalı."), 3000).catch(() => false));
+  await page(`setValue($("input[aria-label='Şifre']"), "Yeni2026x"); exact("button", "Giriş Yap").click(); return true;`);
+  await waitFor(() => page(`return location.pathname === "/dashboard" && !!$("[data-employee-boxes]");`), 8000).catch(() => {});
+  check("Çalışan yöneticinin belirlediği şifreyle doğrudan giriş yapar (onay / davet yok)", (await path()) === "/dashboard?authdemo" && !(await page(`return !!$("[data-set-password]");`)), await path());
   await logout();
 
   /* ── Süresi dolmuş / kullanılmış bağlantı ── */

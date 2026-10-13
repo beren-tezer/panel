@@ -23,7 +23,6 @@ export function createAuthDemoSource(base) {
   const emit = () => listeners.forEach((fn) => fn());
   const callback = typeof window === "undefined" ? null : parseAuthCallback(window.location);
   const needsPw = new Set();
-  const pendingInvites = new Set(["u3"]);
   let callbackPromise = null;
   const mailError = () => {
     const e = globalThis.__cwSimulateInviteError;
@@ -50,11 +49,20 @@ export function createAuthDemoSource(base) {
         accepted.add(emailOf(session));
       },
     },
+    /* Yönetici e-posta + şifreyle kullanıcı oluşturur / şifre belirler (e-posta gönderilmez). __cwSimulateInviteError: sunucu hatası. */
     users: {
-      async invite(user) { await new Promise((r) => setTimeout(r, 150)); mailError(); globalThis.__cwInvites = [...(globalThis.__cwInvites || []), user.email]; return { sent: "invite" }; },
-      async resend(id) { await new Promise((r) => setTimeout(r, 100)); mailError(); globalThis.__cwMails = [...(globalThis.__cwMails || []), `resend:${id}`]; return { sent: "invite" }; },
-      async reset(id) { await new Promise((r) => setTimeout(r, 100)); mailError(); globalThis.__cwMails = [...(globalThis.__cwMails || []), `reset:${id}`]; return { sent: "reset" }; },
-      async status() { return Object.values(DEV_ACCOUNTS).map((id) => ({ id, confirmed: !pendingInvites.has(id) })); },
+      async create(user, brandIds, password) {
+        await new Promise((r) => setTimeout(r, 150)); mailError();
+        globalThis.__cwCreated = [...(globalThis.__cwCreated || []), { email: user.email, role: user.role, password }];
+        return { id: `new-${Date.now()}` };
+      },
+      async setPassword(id, password) {
+        await new Promise((r) => setTimeout(r, 100)); mailError();
+        const email = emailOf(id);
+        if (!email) throw new Error("Kullanıcı bulunamadı.");
+        passwords[email] = password;
+        return { id };
+      },
     },
     account: {
       async setInitialPassword(next) {
@@ -81,7 +89,7 @@ export function createAuthDemoSource(base) {
           const email = callback.tokenHash.startsWith("demo-invite:") ? callback.tokenHash.slice(12) : null;
           const id = email && DEV_ACCOUNTS[email];
           if (!id) throw Object.assign(new Error("Email link is invalid or has expired"), { errorCode: "otp_expired" });
-          session = id; pendingInvites.delete(id);
+          session = id;
           if (["invite", "recovery"].includes(callback.type)) needsPw.add(id);
           emit();
         })();

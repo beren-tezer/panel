@@ -83,21 +83,22 @@ test("geçersiz rol / pasif kullanıcı şifre ekranıyla yetki kazanmaz", () =>
 
 const fn = readFileSync(new URL("../supabase/functions/invite-user/index.ts", import.meta.url), "utf8");
 
-test("davet bağlantısı yalnızca <origin>/auth/callback adresine döner", () => {
-  assert.match(fn, /return `\$\{u\.origin\}\/auth\/callback`;/);
-  assert.doesNotMatch(fn, /redirectTo: typeof body\.redirectTo === "string" \? body\.redirectTo/, "istemcinin gönderdiği adres olduğu gibi kullanılmaz");
+test("kullanıcı şifreyle, e-postası onaylı oluşturulur; hiçbir e-posta gönderilmez (SMTP gerekmez)", () => {
+  assert.match(fn, /admin\.auth\.admin\.createUser\(\{[\s\S]*?password,[\s\S]*?email_confirm: true/);
+  for (const mail of ["inviteUserByEmail", "resetPasswordForEmail", "signInWithOtp", "generateLink", "resend("]) assert.ok(!fn.includes(mail), mail);
 });
 
-test("e-posta gönderilemezse başarı dönülmez; SMTP / sınır hataları ayrı kodlarla bildirilir", () => {
-  for (const code of ["email_failed", "email_rate_limit", "too_soon", "already_active", "pending_invite"]) assert.ok(fn.includes(`"${code}"`), code);
-  assert.match(fn, /if \(inviteError \|\| !invited\?\.user\) return authFailure\(inviteError, "invite"\);/);
+test("şifre kuralı sunucuda da denetlenir (panelle aynı)", async () => {
+  const { MIN_PASSWORD, MAX_PASSWORD } = await import("../passwords.js");
+  assert.ok(fn.includes(`const MIN_PASSWORD = ${MIN_PASSWORD};`) && fn.includes(`const MAX_PASSWORD = ${MAX_PASSWORD};`));
+  assert.ok(fn.indexOf("passwordProblem(password)") < fn.indexOf("createUser("), "şifre hesap oluşturulmadan önce denetlenir");
+  assert.ok(!/console\.(log|error|info)/.test(fn), "şifre / istek gövdesi loglanmaz");
 });
 
-test("yeniden davet ve şifre sıfırlama ayrı senaryolar; yetki her işlemden önce denetlenir", () => {
-  assert.ok(fn.indexOf('me.role !== "admin"') < fn.indexOf('action === "status"'), "admin denetimi tüm işlemlerden önce");
-  assert.match(fn, /if \(user\.email_confirmed_at\) return fail\("already_active"/, "kabul edilmiş davet yeniden gönderilmez");
-  assert.match(fn, /if \(!user\.email_confirmed_at\) return fail\("pending_invite"/, "kabul edilmemiş davete şifre sıfırlama gönderilmez");
-  assert.match(fn, /resetPasswordForEmail\(user\.email!/);
+test("yetki her işlemden önce denetlenir; kullanılan hesabın şifresi / rolü 'oluştur' ile değiştirilemez", () => {
+  assert.ok(fn.indexOf('me.role !== "admin"') < fn.indexOf('action === "set_password"'), "admin denetimi tüm işlemlerden önce");
+  assert.match(fn, /const unused = found\?\.user && !found\.user\.last_sign_in_at/, "yalnızca hiç giriş yapılmamış yarım kayıt tamamlanır");
+  assert.match(fn, /if \(!unused\) return authFailure\(createError\);/);
 });
 
 test("service_role anahtarı istemci koduna girmez", () => {

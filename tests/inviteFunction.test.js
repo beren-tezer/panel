@@ -11,7 +11,7 @@ test("davet fonksiyonu paneldeki tüm izinleri ve rolleri tanır", () => {
   assert.deepEqual(JSON.parse(src.match(/const ROLES = (\[.*\]);/)[1]), ROLES);
 });
 
-test("davet verisinde rol gönderilmez; kullanıcı marka atamasından sonra aktifleşir", () => {
-  assert.doesNotMatch(src.match(/inviteUserByEmail\(email, \{[\s\S]*?\}\);/)[0], /\brole\b/);
+test("kullanıcı verisinde rol gönderilmez; kullanıcı marka atamasından sonra aktifleşir", () => {
+  assert.doesNotMatch(src.match(/createUser\(\{[\s\S]*?\}\);/)[0], /\brole\b/);
   assert.ok(src.indexOf('from("brand_members").upsert') < src.indexOf("active: true"));
 });

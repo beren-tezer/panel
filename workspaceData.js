@@ -327,7 +327,6 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
      ilk yüklemede bu kullanıcı "şifresini belirlemeli" olarak işaretlenir. ?token_hash ile geleni completeCallback doğrular. */
   let markOnLoad = !!(callback && callback.hasSession && !callback.tokenHash && !callback.error && PASSWORD_TYPES.includes(callback.type));
   let callbackPromise = null;
-  const inviteRedirect = () => (typeof window !== "undefined" ? window.location.origin + CALLBACK_PATH : undefined);
   const must = ({ data, error }) => { if (error) throw error; return data; };
 
   /* Kendi yazdığımız satırların canlı güncelleme yankısı, yerel olarak daha yeni bir değeri
@@ -407,12 +406,12 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
     let message = error?.message || "İşlem tamamlanamadı.";
     let code = null;
     try { const body = await error.context.json(); if (body?.error) message = body.error; code = body?.code || null; } catch { /* gövde yok */ }
-    if (!code && /failed to send a request|fetch/i.test(message)) message = "Davet servisine ulaşılamadı (invite-user fonksiyonu yayında mı?). Bağlantınızı kontrol edip tekrar deneyin.";
+    if (!code && /failed to send a request|fetch/i.test(message)) message = "Kullanıcı servisine ulaşılamadı (invite-user fonksiyonu yayında mı?). Bağlantınızı kontrol edip tekrar deneyin.";
     return Object.assign(new Error(message), { code });
   };
-  /* invite-user (Edge Function; service_role yalnızca sunucuda). Hata varsa açık mesajla fırlatır — başarı sayılmaz. */
+  /* invite-user (Edge Function; service_role yalnızca sunucuda; e-posta göndermez). Hata varsa açık mesajla fırlatır — başarı sayılmaz. */
   const invokeUsers = async (body) => {
-    const { data, error } = await supabase.functions.invoke("invite-user", { body: { ...body, redirectTo: inviteRedirect() } });
+    const { data, error } = await supabase.functions.invoke("invite-user", { body });
     if (error) throw await invokeError(error);
     return data;
   };
@@ -551,8 +550,8 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
         break;
       }
       case "ADD_USER": {
-        // Panel davet sonucunu bekler (users.invite); bu yol yalnızca eski çağrılar için kalır.
-        await invokeUsers({ action: "invite", ...invitePayload(action.user, action.brandIds) });
+        // Panel kullanıcıyı users.create ile (şifreyle, sonucu bekleyerek) ekler; bu yol yalnızca eski çağrılar içindir.
+        await invokeUsers({ action: "create", ...invitePayload(action.user, action.brandIds), password: action.password || "" });
         reload(); // gerçek kullanıcı kimliğiyle yeniden yükle
         return;
       }
@@ -724,12 +723,11 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
       },
     },
 
-    /* Kullanıcılar & Yetkiler: davet, yeniden davet, şifre sıfırlama, davet durumu — hepsi sunucuda yetki denetimiyle. */
+    /* Kullanıcılar & Yetkiler: yönetici e-posta + şifreyle kullanıcı oluşturur / şifre belirler. E-posta gönderilmez;
+       yetki sunucuda (aktif admin) denetlenir. Şifre yalnızca HTTPS ile fonksiyona gider, hiçbir yerde saklanmaz. */
     users: {
-      invite: (user, brandIds) => invokeUsers({ action: "invite", ...invitePayload(user, brandIds) }),
-      resend: (userId) => invokeUsers({ action: "resend", userId }),
-      reset: (userId) => invokeUsers({ action: "reset", userId }),
-      async status() { const res = await invokeUsers({ action: "status" }); return res?.users || []; },
+      create: (user, brandIds, password) => invokeUsers({ action: "create", ...invitePayload(user, brandIds), password }),
+      setPassword: (userId, password) => invokeUsers({ action: "set_password", userId, password }),
     },
 
     auth: {

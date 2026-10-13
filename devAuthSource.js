@@ -84,7 +84,7 @@ export function createAuthDemoSource(base) {
       completeCallback() {
         if (!callback?.tokenHash) return Promise.resolve();
         callbackPromise ||= (async () => {
-          await new Promise((r) => setTimeout(r, 200));
+          await new Promise((r) => setTimeout(r, 1000)); // gerçek ağ gecikmesi (test: doğrulama sürerken yönlendirme yok)
           window.history.replaceState(null, "", `${CALLBACK_PATH}?authdemo`);
           const email = callback.tokenHash.startsWith("demo-invite:") ? callback.tokenHash.slice(12) : null;
           const id = email && DEV_ACCOUNTS[email];
@@ -101,7 +101,7 @@ export function createAuthDemoSource(base) {
         if (!id || password !== passwords[String(email).trim().toLowerCase()]) throw new Error("E-posta veya şifre hatalı.");
         session = id; emit();
       },
-      async sendLink() { throw new Error("Test ortamında e-posta gönderilmez."); },
+      // sendLink yok: canlıdaki gibi giriş yalnızca şifreyle (e-posta bağlantısı seçeneği gösterilmez).
       async signOut() { session = null; emit(); },
     },
   };

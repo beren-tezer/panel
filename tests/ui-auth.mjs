@@ -23,6 +23,7 @@ try {
   const p0 = await path();
   check("Giriş yapmamış kullanıcı /dashboard → /login (dönüş adresi saklanır)", p0 === "/login?next=%2Fdashboard&authdemo", p0);
   check("Giriş ekranı: e-posta + şifre", await page(`return !!$("input[aria-label='E-posta']") && !!$("input[type='password'][aria-label='Şifre']") && !$("[data-brand-card]");`));
+  check("E-postayla giriş bağlantısı seçeneği yok (yalnızca şifre)", await page(`return !document.body.textContent.includes("giriş bağlantısı");`));
 
   await page(`exact("button", "Giriş Yap").click(); return true;`);
   check("Boş alan doğrulaması", await waitFor(() => page(`return document.body.textContent.includes("Geçerli bir e-posta adresi girin.");`), 2000).catch(() => false));

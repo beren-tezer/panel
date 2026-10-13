@@ -9,7 +9,7 @@
  *   persist(action, prev, next, h) → Promise                 (h.patchTask(id, patch): sunucudan dönen alanları yerel duruma işler)
  *   onAuthChange?(cb)              → abonelikten çıkma fonksiyonu
  *   subscribe?({ onEvent, onResync }) → canlı güncelleme; onEvent(REMOTE_UPSERT | REMOTE_DELETE işlemi)
- *   auth?                          → { sendLink(email), signOut() }  (null ise giriş ekranı gösterilmez)
+ *   auth?                          → { signInWithPassword(email, pw), sendLink?(email), signOut() }  (null ise giriş ekranı gösterilmez)
  *   media?                         → { upload(file, taskId) → { path, url }, resolve(paths) → { path: url } }
  *                                    (null ise açıklama görselleri metne gömülür — yalnızca demo)
  *   brandKit?                      → marka kılavuzu API'si (bkz. brandKit.js)
@@ -755,17 +755,8 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
         if (error.status === 429 || /rate limit|too many/i.test(error.message)) throw new Error("Çok fazla deneme yapıldı. Birkaç dakika sonra tekrar deneyin.");
         throw new Error("Giriş yapılamadı. Bağlantınızı kontrol edip tekrar deneyin.");
       },
-      // redirectPath: giriş bağlantısının döneceği iç adres (router.safeNext ile doğrulanmış; ör. /onay/<marka>).
-      sendLink: async (email, redirectPath = "/") => {
-        const { error } = await supabase.auth.signInWithOtp({
-          email: email.trim(),
-          options: { shouldCreateUser: false, emailRedirectTo: window.location.origin + (String(redirectPath).startsWith("/") && !String(redirectPath).startsWith("//") ? redirectPath : "/") },
-        });
-        if (!error) return;
-        if (/signups? not allowed|user not found/i.test(error.message)) throw new Error("Bu e-posta ekipte kayıtlı değil. Yöneticinizden davet isteyin.");
-        if (error.status === 429 || /rate limit|security purposes/i.test(error.message)) throw new Error("Çok sık deneme yapıldı. Birkaç dakika sonra tekrar deneyin.");
-        throw error;
-      },
+      // E-postayla giriş bağlantısı (magic link) KAPALI: her kullanıcı yöneticinin belirlediği kendi şifresiyle girer;
+      // panel hiçbir e-posta göndermez (SMTP gerekmez). sendLink tanımlı olmadığı için giriş ekranında bu seçenek görünmez.
       signOut: async () => { await flushDescriptions(); must(await supabase.auth.signOut()); },
     },
 

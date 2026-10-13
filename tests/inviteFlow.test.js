@@ -88,6 +88,13 @@ test("kullanıcı şifreyle, e-postası onaylı oluşturulur; hiçbir e-posta g�
   for (const mail of ["inviteUserByEmail", "resetPasswordForEmail", "signInWithOtp", "generateLink", "resend("]) assert.ok(!fn.includes(mail), mail);
 });
 
+test("panel de e-posta göndermez: giriş yalnızca şifreyle (e-posta bağlantısı yok)", () => {
+  for (const f of ["../workspaceData.js", "../AgencyWorkspace.jsx", "../src/supabase.js", "../src/main.jsx"]) {
+    const code = readFileSync(new URL(f, import.meta.url), "utf8");
+    for (const mail of ["signInWithOtp", "resetPasswordForEmail", "inviteUserByEmail", "auth.resend("]) assert.ok(!code.includes(mail), `${f}: ${mail}`);
+  }
+});
+
 test("şifre kuralı sunucuda da denetlenir (panelle aynı)", async () => {
   const { MIN_PASSWORD, MAX_PASSWORD } = await import("../passwords.js");
   assert.ok(fn.includes(`const MIN_PASSWORD = ${MIN_PASSWORD};`) && fn.includes(`const MAX_PASSWORD = ${MAX_PASSWORD};`));

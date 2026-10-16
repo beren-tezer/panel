@@ -164,7 +164,7 @@ try {
     await page(`return $$("[data-checklist-template]")[0]?.textContent.slice(0, 160);`));
 
   // Mevcut görev (Lüks villa tanıtımı, Tepe Emlak, Gönderi) eski maddeleri korur
-  await page(`$$("aside button").find((b) => b.textContent.includes("İçerik Planlayıcı")).click();`);
+  await page(`$$("aside button").find((b) => b.textContent.includes("Genel Bakış")).click();`);
   await waitFor(() => page(`return !!$$("button").find((x) => x.textContent.trim() === "Lüks villa tanıtımı");`), 4000);
   await openTaskByTitle("Lüks villa tanıtımı");
   await waitDrawer("Lüks villa tanıtımı");
@@ -176,12 +176,15 @@ try {
   await openTaskByTitle("Portföy sayfası güncellemesi");
   await waitDrawer("Portföy sayfası güncellemesi");
   check("Web görevi varsayılan şablonu kullanır", (await counts())[1] === 12);
-  await page(`$("button[aria-label='Format seç']", ${drawer}).click();`);
+  // Genel (web/reklam/ajans) görevin Görev Türü menüsü yalnızca genel türleri gösterir; eski "Web" değeri kaybolmaz.
+  await page(`$("button[aria-label='Görev Türü seç']", ${drawer}).click();`);
   await waitFor(() => page(`return !!$("[data-cw-popover]");`), 2000);
-  await page(`exact("[data-cw-popover] button", "Gönderi").click();`);
-  await waitFor(async () => (await counts())?.[1] === 7, 3000).catch(() => {});
-  check("Format Gönderi olunca güncel marka şablonu (sürüm 2) uygulanır", await page(`return $$("[data-check-item] p")[0]?.textContent === "Kurumsal renk paletine uyuldu." && ${section}.textContent.includes("s2");`),
-    await page(`return $$("[data-check-item] p").map((p) => p.textContent).slice(0, 2).join(" | ") + " " + $("[id^='cl-title-']").textContent;`));
+  const typeOpts = await page(`return $$("[data-cw-popover] button").map((b) => b.textContent.trim());`);
+  check("Genel görevin Görev Türü menüsü: 3 genel tür + mevcut eski değer, sosyal medya türü yok",
+    ["Web & Teknik", "Ajans İçi İşler", "Reklam İşleri", "Web"].every((t) => typeOpts.includes(t)) && !typeOpts.includes("Gönderi"), typeOpts.join(" | "));
+  await page(`exact("[data-cw-popover] button", "Reklam İşleri").click();`);
+  await waitFor(() => page(`return ${drawer}.textContent.includes("Reklam İşleri");`), 3000).catch(() => {});
+  check("Görev türü değişince işaretlenmemiş liste güncel şablonla kalır", await page(`return ${drawer}.textContent.includes("Reklam İşleri");`) && (await counts())?.[1] === 12, JSON.stringify(await counts()));
 
   /* Admin: eksik kontrolle gönderim yalnızca gerekçeyle */
   await page(`exact("button", "Onaya Gönder", ${drawer}).click();`);

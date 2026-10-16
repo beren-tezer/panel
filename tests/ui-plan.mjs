@@ -1,4 +1,4 @@
-// Yönetici operasyon masası (4 sayaç + 8 grup) ve Sosyal Medya Planı (Günlük / Haftalık / Aylık).
+// Yönetici birleşik Dashboard (4 kategori kutusu + Günlük Operasyon Akışı + İçerik Planlayıcı, logo, Görev Türü) ve Sosyal Medya Planı (Günlük / Haftalık / Aylık).
 //   npm run test:ui:plan          (SHOTS=<klasör> verilirse ekran görüntüleri de kaydedilir)
 import { writeFileSync } from "node:fs";
 import { startHarness, waitFor, sleep } from "./ui-harness.mjs";
@@ -7,41 +7,90 @@ const h = await startHarness({ port: 5192, debugPort: 9352 });
 const { page, viewport, check, consoleProblems, send } = h;
 const SHOTS = process.env.SHOTS;
 const shot = async (name) => { if (!SHOTS) return; const r = await send("Page.captureScreenshot", { format: "png" }); writeFileSync(`${SHOTS}/${name}.png`, Buffer.from(r.data, "base64")); };
-const ORDER = ["Geciken & Acil İşler", "Yönetici Onayı", "Müşteri Onayı", "Aktif Çalışmalar", "Tamamlanan & Yayına Hazır", "Web & Teknik", "Ajans İçi İşler", "Reklam İşleri"];
+const ORDER = ["Tamamlanan & Yayına Hazır", "Web & Teknik", "Ajans İçi İşler", "Reklam İşleri"];
+const GENERAL = ["Web & Teknik", "Ajans İçi İşler", "Reklam İşleri"];
 const nav = (label) => page(`const b = $$("aside button").find((x) => x.textContent.trim().startsWith(${JSON.stringify(label)})); b.click(); return true;`);
 const overflow = () => page(`return document.documentElement.scrollWidth - window.innerWidth;`);
 
 try {
-  /* ── 1. Operasyon masası ── */
+  /* ── 1. Birleşik Dashboard: Genel Bakış (4 kategori kutusu) + Günlük Operasyon Akışı + İçerik Planlayıcı ── */
   await viewport(1440, 900);
   await send("Page.navigate", { url: h.url });
-  await waitFor(() => page(`return $$("[data-ops-box]").length === 8;`), 45000); // ilk derleme (büyük JSX) yavaş makinede 15 sn'yi aşabilir
+  await waitFor(() => page(`return $$("[data-ops-box]").length === 4;`), 45000); // ilk derleme (büyük JSX) yavaş makinede 15 sn'yi aşabilir
   const desk = await page(`return {
-    metrics: $$("[data-ops-metric]").map((m) => [m.dataset.opsMetric, m.querySelector("p").textContent, +m.querySelector("[data-ops-value]").dataset.opsValue]),
+    metrics: $$("[data-ops-metric]").length,
     boxes: $$("[data-ops-box]").map((b) => { const r = b.getBoundingClientRect(); return { key: b.dataset.opsBox, title: b.querySelector("h3").textContent, n: +b.querySelector("[data-ops-count]").dataset.opsCount, items: $$("[data-ops-task]", b).map((x) => x.dataset.opsTask), x: Math.round(r.x), y: Math.round(r.y) }; }),
   };`);
-  check("4 sayaç: Bugünkü Teslimatlar, Geciken İşler, Yönetici Onayı, Müşteri Onayı", JSON.stringify(desk.metrics.map((m) => m[1])) === JSON.stringify(["Bugünkü Teslimatlar", "Geciken İşler", "Yönetici Onayı", "Müşteri Onayı"]), desk.metrics.map((m) => `${m[1]}=${m[2]}`).join(", "));
-  check("8 grup, istenen sırada", JSON.stringify(desk.boxes.map((b) => b.title)) === JSON.stringify(ORDER), desk.boxes.map((b) => b.title).join(" | "));
+  check("Yalnızca 4 kart, istenen sırada (eski sayaç/onay/geciken kutuları yok)", desk.metrics === 0 && JSON.stringify(desk.boxes.map((b) => b.title)) === JSON.stringify(ORDER), desk.boxes.map((b) => b.title).join(" | "));
   const all = desk.boxes.flatMap((b) => b.items);
-  check("Her görev yalnızca bir grupta; sayılar listeyle aynı", all.length > 0 && new Set(all).size === all.length && desk.boxes.every((b) => b.n === b.items.length), `${all.length} görev`);
-  const m = Object.fromEntries(desk.metrics.map((x) => [x[0], x[2]])), bx = Object.fromEntries(desk.boxes.map((b) => [b.key, b.n]));
-  check("Onay sayaçları gruplarla tutarlı", m.manager === bx.manager && m.client === bx.client && m.manager > 0 && m.client > 0, JSON.stringify({ m, bx }));
-  const rows = [...new Set(desk.boxes.map((b) => b.y))];
-  check("1440px: 4 sütun × 2 satır", rows.length === 2 && desk.boxes.slice(0, 4).every((b) => b.y === rows[0]) && desk.boxes.slice(4).every((b) => b.y === rows[1]));
+  check("Her görev yalnızca bir kutuda; sayılar listeyle aynı", all.length > 0 && new Set(all).size === all.length && desk.boxes.every((b) => b.n === b.items.length), desk.boxes.map((b) => `${b.key}=${b.n}`).join(", "));
+  check("Web / Ajans İçi / Reklam kutuları gerçek veriden dolu", ["web", "agency", "ads"].every((k) => desk.boxes.find((b) => b.key === k).n > 0), desk.boxes.map((b) => `${b.key}=${b.n}`).join(", "));
+  check("1440px: 4 kart tek satırda", new Set(desk.boxes.map((b) => b.y)).size === 1 && new Set(desk.boxes.map((b) => b.x)).size === 4);
   await shot("desk-1440");
-  const opened = await page(`$("[data-ops-box='manager'] [data-ops-task]").click(); await tick(400); return !!$("aside[aria-label='Görev detayı']");`);
-  check("Gruptaki işe tıklayınca görev detayı açılır", opened);
+  const sections = await page(`const ys = ["[data-ops-desk]", "[data-dashboard-section='cw-daily']", "[data-dashboard-section='cw-planner']"].map((s) => $(s) ? Math.round(rect($(s)).y) : null);
+    return { ys, path: location.pathname, table: !!$("[data-dashboard-section='cw-planner'] table"), tabs: !!byText("button", "İçerik Tablosu") };`);
+  check("Genel Bakış → Günlük Operasyon Akışı → İçerik Planlayıcı aynı sayfada, bu sırada (/dashboard)",
+    sections.ys.every((y) => y !== null) && sections.ys[0] < sections.ys[1] && sections.ys[1] < sections.ys[2] && sections.path === "/dashboard" && sections.table && !sections.tabs, JSON.stringify(sections));
+  const navLabels = await page(`return $$("aside[aria-label='Ana menü'] button").map((b) => b.textContent.trim());`);
+  check("Menüde ayrı 'Günlük Operasyon Akışı' / 'İçerik Planlayıcı' yok; 'Genel Bakış' ve diğer modüller duruyor",
+    !navLabels.some((t) => t.startsWith("Günlük Operasyon Akışı") || t.startsWith("İçerik Planlayıcı")) && navLabels.some((t) => t.startsWith("Genel Bakış")) && navLabels.some((t) => t.startsWith("Sosyal Medya Planı")), navLabels.filter((t) => t.length < 40).slice(0, 8).join(" | "));
+  const opened = await page(`$("[data-ops-box='web'] [data-ops-task]").click(); await tick(400); return !!$("aside[aria-label='Görev detayı']");`);
+  check("Kutudaki işe tıklayınca görev detayı açılır", opened);
   await page(`$("button[aria-label='Detayı kapat']")?.click(); return true;`);
   await sleep(300);
+
+  /* Görev Türü: genel bağlam ve modül ön seçimi */
+  const typeOptions = () => page(`const s = $("select[data-task-type-select]"); return s ? { ctx: s.dataset.taskTypeSelect, value: s.value, options: [...s.options].map((o) => o.value), label: !!s.closest("[data-cw-modal]")?.textContent.includes("Görev Türü") } : null;`);
+  const closeModal = () => page(`const b = exact("[data-cw-modal] button", "İptal"); if (b) b.click(); else document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await tick(300); return !$("select[data-task-type-select]");`);
+  for (const [key, type] of [["web", "Web & Teknik"], ["agency", "Ajans İçi İşler"], ["ads", "Reklam İşleri"]]) {
+    await page(`$("[data-ops-new='${key}']").click(); return true;`);
+    const t = await waitFor(typeOptions, 4000).catch(() => null);
+    check(`${type} kutusundan '+': Görev Türü = ${type}, yalnızca 3 genel tür`, t && t.value === type && JSON.stringify(t.options) === JSON.stringify(GENERAL), JSON.stringify(t));
+    await closeModal();
+  }
+  await page(`(exact("header button", "Yeni Görev") || byText("header button", "Yeni Görev")).click(); return true;`);
+  const hdr = await waitFor(typeOptions, 4000).catch(() => null);
+  check("Dashboard 'Yeni Görev': 'Görev Türü' etiketi, yalnızca 3 genel tür", hdr && hdr.label && JSON.stringify(hdr.options) === JSON.stringify(GENERAL), JSON.stringify(hdr));
+  await closeModal();
+  const quick = await page(`const s = $("select[aria-label='Yeni görev görev türü']"); return s ? [...s.options].map((o) => o.value) : null;`);
+  check("Planlayıcı hızlı ekleme: yalnızca 3 genel tür", JSON.stringify(quick) === JSON.stringify(GENERAL), JSON.stringify(quick));
+  const formatWord = await page(`return /\\bFormat\\b/.test(document.body.innerText);`);
+  check("Arayüzde 'Format' ifadesi görünmüyor", !formatWord);
+
+  /* Logo: marka bağlamı ve filtreler sıfırlanır, /dashboard tüm markalarla açılır */
+  const plannerCount = () => page(`return +$("[data-dashboard-section='cw-planner'] [data-section-count]").dataset.sectionCount;`);
+  const total = await plannerCount();
+  await page(`$$("aside button[aria-pressed]").find((b) => b.textContent.includes("Tepe Emlak")).click(); return true;`);
+  await sleep(300);
+  await page(`setValue($("input[aria-label='Genel arama']"), "a"); return true;`);
+  await sleep(300);
+  const narrowed = await plannerCount();
+  await page(`$("[data-home-link]").click(); return true;`);
+  await sleep(400);
+  const reset = await page(`return { count: +$("[data-dashboard-section='cw-planner'] [data-section-count]").dataset.sectionCount, pressed: $$("aside button[aria-pressed='true']").length,
+    search: $("input[aria-label='Genel arama']").value, path: location.pathname, boxes: $$("[data-ops-box]").length, tag: $("[data-home-link]").tagName };`);
+  check("Logo tıklanınca seçili marka + arama temizlenir, tüm markalar görünür, /dashboard",
+    narrowed < total && reset.count === total && reset.pressed === 0 && reset.search === "" && reset.path === "/dashboard" && reset.boxes === 4 && reset.tag === "BUTTON", JSON.stringify({ total, narrowed, ...reset }));
+  await nav("Sosyal Medya Planı");
+  await waitFor(() => page(`return !!$("[data-social-plan]");`));
+  await page(`$("[data-home-link]").focus(); $("[data-home-link]").click(); return document.activeElement === $("[data-home-link]");`);
+  const back = await waitFor(() => page(`return $$("[data-ops-box]").length === 4 && !$("[data-social-plan]");`), 4000).catch(() => false);
+  check("Başka sayfadayken logo (odaklanabilir düğme) Dashboard'a döner", back);
 
   for (const [w, cols] of [[1920, 4], [1024, 2], [375, 1]]) {
     await viewport(w, 900, w < 640);
     await sleep(300);
     const xs = await page(`return [...new Set($$("[data-ops-box]").map((b) => Math.round(b.getBoundingClientRect().x)))].length;`);
     const of = await overflow();
-    check(`${w}px: grup kutuları ${cols} sütuna kayar, yatay taşma yok`, xs === cols && of <= 0, `sütun ${xs}, taşma ${of}px`);
+    check(`${w}px: kartlar ${cols} sütuna kayar, yatay taşma yok`, xs === cols && of <= 0, `sütun ${xs}, taşma ${of}px`);
     if (w === 375) await shot("desk-375");
   }
+
+  /* Tarayıcı yenileme: /dashboard yeniden açılır */
+  await viewport(1440, 900);
+  await send("Page.reload", {});
+  const reloaded = await waitFor(() => page(`return $$("[data-ops-box]").length === 4 && location.pathname === "/dashboard";`), 45000).catch(() => false);
+  check("Yenileme sonrası /dashboard çalışır", reloaded);
 
   /* ── 2. Sosyal Medya Planı — Aylık ── */
   await viewport(1440, 900);
@@ -62,6 +111,13 @@ try {
   check("Haftalara bölünmüş ('1. Hafta' …)", month.weeks.length > 0 && month.weeks.every((w) => /^\d\. Hafta/.test(w)), month.weeks.join(" | "));
   check("Her satırda durum menüsü, ek ve yorum göstergesi", month.rows.length > 0 && month.status === month.rows.length && month.perRow.every((n) => n === 2), `${month.rows.length} satır`);
   await shot("plan-month-1440");
+  await page(`byText("[data-social-plan] button", "Yeni Görev").click(); return true;`);
+  const social = await waitFor(() => page(`const s = $("select[data-task-type-select]"); return s ? { ctx: s.dataset.taskTypeSelect, options: [...s.options].map((o) => o.value) } : null;`), 4000).catch(() => null);
+  check("Sosyal Medya Planı 'Yeni Görev': sosyal medya türleri (genel türler yok)", social && social.ctx === "social" && social.options.includes("Reels") && social.options.includes("Gönderi") && !social.options.some((o) => GENERAL.includes(o)), JSON.stringify(social));
+  await page(`exact("[data-cw-modal] button", "İptal").click(); return true;`);
+  await sleep(300);
+  const filterOpts = await page(`return [...$("[data-plan-type-filter]").options].map((o) => o.textContent);`);
+  check("Sosyal Medya Planı Görev Türü süzgeci", filterOpts[0] === "Tüm Görev Türleri" && filterOpts.includes("Karusel"), filterOpts.join(" | "));
 
   const hover = await page(`
     const withComments = () => $$("[data-plan-row] button[aria-label$=' yorum']")[0];

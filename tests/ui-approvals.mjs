@@ -22,7 +22,7 @@ const uploadPng = (name) => page(`const bin = atob(${JSON.stringify(PNG)}); cons
   const dt = new DataTransfer(); dt.items.add(new File([bytes], ${JSON.stringify(name)}, { type: "image/png" }));
   const input = $("[data-content-file-input]"); input.files = dt.files; input.dispatchEvent(new Event("change", { bubbles: true })); return true;`);
 const openTaskInPlanner = async () => {
-  await nav(await page(`return $$("aside button").some((b) => b.textContent.includes("İçerik Planlayıcı")) ? "İçerik Planlayıcı" : "Görevlerim";`));
+  await nav(await page(`return $$("aside button").some((b) => b.textContent.includes("Görevlerim")) ? "Görevlerim" : "Genel Bakış";`));
   await waitFor(() => page(`return !!$$("table button").find((x) => x.textContent.trim() === ${JSON.stringify(TITLE)});`), 5000);
   await page(`$$("table button").find((x) => x.textContent.trim() === ${JSON.stringify(TITLE)}).click();`);
   await waitFor(() => page(`return !!${drawer} && !!$("[data-content-versions]");`), 4000);
@@ -75,11 +75,12 @@ try {
   await page(`$("[role='dialog'][aria-label='Markayı Düzenle'] button[aria-label='Kapat']").click();`);
 
   /* 2. Admin görev oluşturur (Tepe Emlak, sorumlu Ayşe) */
-  await nav("Günlük Operasyon Akışı");
-  await page(`$$("button").find((b) => b.textContent.trim() === "Yeni Görev" || b.getAttribute("aria-label") === "Yeni Görev").click();`);
+  await nav("Sosyal Medya Planı");
+  await waitFor(() => page(`return !!$("[data-social-plan]");`), 4000);
+  await page(`$$("[data-social-plan] button").find((b) => b.textContent.trim() === "Yeni Görev").click();`);
   await waitFor(() => page(`return !!$("[role='dialog'][aria-label='Yeni Görev']");`), 2000);
   await page(`setValue(${field("Görev Başlığı")}, ${JSON.stringify(TITLE)});
-    setValue(${field("Marka")}, "b-tepe"); setValue(${field("Sorumlu")}, "u2"); setValue(${field("Format")}, "Gönderi"); return true;`);
+    setValue(${field("Marka")}, "b-tepe"); setValue(${field("Sorumlu")}, "u2"); setValue(${field("Görev Türü")}, "Gönderi"); return true;`);
   await page(`exact("button", "Görevi Oluştur").click();`);
   await sleep(300);
   check("Admin görevi oluşturur", (await toasts()).includes("Görev oluşturuldu"), await toasts());

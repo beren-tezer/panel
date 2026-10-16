@@ -1,41 +1,45 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { OPS_BOXES, opsBox, opsMetrics, planDate, weekOfMonth } from "../taskIndicators.js";
+import { OPS_BOXES, opsBox, planDate, weekOfMonth } from "../taskIndicators.js";
+import { GENERAL_TASK_TYPES, SOCIAL_MEDIA_TASK_TYPES, contextOfType, defaultTaskType, taskCategory, taskTypeOptions } from "../taskTypes.js";
 
-const NOW = new Date("2026-10-10T09:00:00Z"); // İstanbul 12:00
 const t = (o) => ({ status: "Çalışılıyor", platform: "Instagram", format: "Reels", priority: "Orta", dueDate: "2026-10-12", dueTime: "", brandId: "b", ...o });
-const box = (o, isAgency) => opsBox(t(o), { now: NOW, isAgency });
+const box = (o, isAgency) => opsBox(t(o), { isAgency });
 
-test("8 grup, istenen sırada", () => {
-  assert.deepEqual(OPS_BOXES.map((b) => b.title), ["Geciken & Acil İşler", "Yönetici Onayı", "Müşteri Onayı", "Aktif Çalışmalar", "Tamamlanan & Yayına Hazır", "Web & Teknik", "Ajans İçi İşler", "Reklam İşleri"]);
+test("Genel Bakış: yalnızca 4 kategori kutusu, istenen sırada", () => {
+  assert.deepEqual(OPS_BOXES.map((b) => b.title), ["Tamamlanan & Yayına Hazır", "Web & Teknik", "Ajans İçi İşler", "Reklam İşleri"]);
 });
 
-test("görev tek bir gruba düşer; öncelik sırası", () => {
+test("görev tek bir kutuya düşer; sosyal medya içeriği kutulara girmez", () => {
   assert.equal(box({ status: "Tamamlandı", dueDate: "2026-10-01" }), "done");
-  assert.equal(box({ status: "Onaylandı" }), "done");
-  assert.equal(box({ status: "Yönetici Onayı", dueDate: "2026-10-01" }), "manager", "onaydaki iş gecikmiş sayılmaz");
-  assert.equal(box({ status: "Müşteri Onayı" }), "client");
-  assert.equal(box({ dueDate: "2026-10-09" }), "urgent", "gecikmiş");
-  assert.equal(box({ status: "Gecikti" }), "urgent");
-  assert.equal(box({ priority: "Yüksek", dueDate: "2026-10-10", dueTime: "18:00" }), "urgent", "yüksek öncelik + bugün");
-  assert.equal(box({ priority: "Orta", dueDate: "2026-10-10", dueTime: "18:00" }), "active", "orta öncelik bugün acil değil");
-  assert.equal(box({ format: "Web", platform: "Web Sitesi", dueDate: "2026-10-09" }), "urgent", "gecikme türden önce gelir");
+  assert.equal(box({ status: "Onaylandı", format: "Web & Teknik" }), "done", "teslim edilmiş iş türünden önce gelir");
+  assert.equal(box({ format: "Web & Teknik" }), "web");
+  assert.equal(box({ format: "Web & Teknik", dueDate: "2026-10-01", status: "Yönetici Onayı" }), "web", "gecikmiş / onaydaki açık iş kendi türünde sayılır");
+  assert.equal(box({ format: "Ajans İçi İşler" }), "agency");
+  assert.equal(box({ format: "Reklam İşleri" }), "ads");
+  assert.equal(box({ format: "Reels" }), null);
+  assert.equal(box({ format: "Gönderi", status: "Müşteri Onayı" }), null);
+  // Eski kayıtlar
   assert.equal(box({ format: "Web", platform: "Web Sitesi" }), "web");
   assert.equal(box({ format: "Rapor", platform: "Web Sitesi" }, () => true), "web", "web ajans içinden önce");
-  assert.equal(box({ format: "Rapor", platform: "LinkedIn" }, () => true), "agency");
+  assert.equal(box({ format: "Rapor", platform: "LinkedIn" }, () => true), "agency", "ajansın kendi markası");
   assert.equal(box({ format: "Reklam", platform: "Meta Reklam" }), "ads");
-  assert.equal(box({ status: "Revizyon" }), "active");
-  assert.equal(box({ status: "Başlanmadı", dueDate: null }), "active");
+  assert.equal(box({ format: "Rapor", platform: "Google Reklam" }), "ads");
+  assert.equal(box({ format: "Rapor", platform: "LinkedIn" }), null);
 });
 
-test("sayaçlar: bugün / dün, geciken + kritik, onaylar", () => {
-  const list = [
-    t({ dueDate: "2026-10-10", dueTime: "18:00" }), t({ dueDate: "2026-10-10", status: "Tamamlandı" }),
-    t({ dueDate: "2026-10-09" }), t({ dueDate: "2026-10-08", priority: "Yüksek" }), t({ dueDate: "2026-10-09", status: "Tamamlandı" }),
-    t({ status: "Yönetici Onayı", dueDate: "2026-10-01" }), t({ status: "Müşteri Onayı" }), t({ status: "Müşteri Onayı" }),
-  ];
-  assert.deepEqual(opsMetrics(list, { now: NOW, today: "2026-10-10", yesterday: "2026-10-09" }),
-    { today: 2, yesterday: 2, late: 3, critical: 1, manager: 1, client: 2 });
+test("görev türü seçenekleri bağlama göre", () => {
+  assert.deepEqual(taskTypeOptions("general"), GENERAL_TASK_TYPES);
+  assert.deepEqual(taskTypeOptions("social"), SOCIAL_MEDIA_TASK_TYPES);
+  assert.ok(!taskTypeOptions("general").some((x) => SOCIAL_MEDIA_TASK_TYPES.includes(x)), "genel listede sosyal medya türü yok");
+  assert.deepEqual(taskTypeOptions("general", "Web"), [...GENERAL_TASK_TYPES, "Web"], "eski değer düzenlemede kaybolmaz");
+  assert.deepEqual(taskTypeOptions("general", "Reklam İşleri"), GENERAL_TASK_TYPES);
+  assert.equal(contextOfType("Karusel"), "social");
+  assert.equal(contextOfType("Rapor"), "general");
+  assert.equal(defaultTaskType("general", "Reklam İşleri"), "Reklam İşleri");
+  assert.equal(defaultTaskType("general", "Reels"), "Web & Teknik", "bağlama uymayan ön seçim kullanılmaz");
+  assert.equal(defaultTaskType("social"), "Reels");
+  assert.equal(taskCategory(t({ format: "Hikâye" })), "social");
 });
 
 test("plan tarihi ve ay içi hafta (Eylül 2026: 1 Eylül salı)", () => {

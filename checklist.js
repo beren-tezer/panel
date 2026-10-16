@@ -14,6 +14,8 @@
  *   history(taskId)                   → { events, submissions }
  */
 
+import { ALL_TASK_TYPES } from "./taskTypes.js";
+
 /* ───────────────────────── Sabitler ───────────────────────── */
 
 export const CHECK_CATEGORIES = {
@@ -22,8 +24,10 @@ export const CHECK_CATEGORIES = {
   technical: "Teknik Kontroller",
   other: "Diğer Kontroller",
 };
-export const TASK_TYPES = ["Reels", "Gönderi", "Hikâye", "Karusel", "Video", "Web", "Reklam", "Rapor"];
-export const CREATIVE_TASK_TYPES = TASK_TYPES.filter((t) => t !== "Rapor");
+/* Şablonun uygulanacağı görev türleri (tasks.format değerleri; tek kaynak: taskTypes.js). Eski değerler geçerli kalır. */
+export const TASK_TYPES = ALL_TASK_TYPES;
+// Varsayılan şablon: üretim işleri (rapor ve ajans içi işler hariç).
+export const CREATIVE_TASK_TYPES = TASK_TYPES.filter((t) => t !== "Rapor" && t !== "Ajans İçi İşler");
 
 /* "Onaya Gönder" ile girilen aşamalar ve gönderimden sonra kontrollerin kilitlendiği aşamalar. */
 export const REVIEW_STATUSES = new Set(["Yönetici Onayı", "Müşteri Onayı"]);

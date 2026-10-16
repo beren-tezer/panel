@@ -125,7 +125,7 @@ try {
   await page(`$("[data-cw-modal] button.bg-red-600").click();`);
   await waitFor(() => page(`return card("Atlas Ajans").querySelectorAll("[data-task-row]").length === ${before.cre - 1};`));
   // Sofra Pide'ya tablo hızlı ekleme ile görev eklenir
-  await page(`byText("button", "İçerik Tablosu").click();`);
+  // Yönetici Dashboard'u: İçerik Planlayıcı (hızlı ekleme) Günlük Operasyon Akışı ile aynı sayfada; sekme yok.
   await waitFor(() => page(`return !!$("input[aria-label='Yeni görev adı']");`));
   const toAdd = 25 - before.spa;
   for (let i = 1; i <= toAdd; i++) {
@@ -136,7 +136,6 @@ try {
     `);
     await page(`byText("button", "Ekle", $("input[aria-label='Yeni görev adı']").closest("tr")).click();`);
   }
-  await page(`byText("button", "Günlük Akış").click();`);
   await waitFor(() => page(`return $$("[data-card-toggle]").length > 0;`));
   await expandAll();
   await waitFor(() => page(`return card("Sofra Pide") && card("Sofra Pide").querySelectorAll("[data-task-row]").length === 25;`));
@@ -270,15 +269,18 @@ try {
   await waitFor(() => page(`return $$("[data-brand-card]").length > 0;`), 5000);
   check("Rol değiştirici admin paneline geri döner", true);
 
-  /* ── 7b. Genel Bakış yalnızca grafikler; marka görevleri marka sayfasında ── */
+  /* ── 7b. Dashboard: Günlük Operasyon Akışı yalnızca bugünün görevleri (tüm görevler İçerik Planlayıcıda) ── */
   await page(`window.__CW_ALL_BRANDS__ = false; byText("aside button", "Genel Bakış").click(); return true;`);
-  const dash = await waitFor(() => page(`return !$("[data-brand-card]") && $("[data-dashboard-hint]") ? { charts: !!byText("main h2", "Genel Bakış") } : null;`), 5000).catch(() => null);
-  check("Genel Bakış'ta marka kartı listelenmez, grafikler kalır", dash && dash.charts, JSON.stringify(dash));
+  const sectionCount = (id) => `+$("[data-dashboard-section='${id}'] [data-section-count]").dataset.sectionCount`;
+  const dash = await waitFor(() => page(`const d = ${sectionCount("cw-daily")}, p = ${sectionCount("cw-planner")};
+    const rows = $$("[data-dashboard-section='cw-daily'] [data-task-row]").length;
+    return p > 0 && d < p ? { daily: d, planner: p, charts: !!$("[data-ops-desk]"), outside: $$("[data-brand-card]").filter((c) => !c.closest("[data-dashboard-section='cw-daily']")).length, rows } : null;`), 5000).catch(() => null);
+  check("Dashboard'da Günlük Akış yalnızca bugünün görevleri (ana sayfa tüm kartları yüklemez), grafikler üstte", dash && dash.charts && dash.outside === 0, JSON.stringify(dash));
   await page(`$$("aside button[aria-pressed]").find((b) => b.textContent.includes("Sofra Pide")).click(); return true;`);
-  const one = await waitFor(() => page(`const cs = $$("[data-brand-card]"); return cs.length === 1 && cs[0].querySelector("h3").textContent.trim() === "Sofra Pide" && !$("[data-dashboard-hint]");`), 5000).catch(() => false);
-  check("Marka seçilince yalnızca o markanın görevleri gösterilir", one);
+  const one = await waitFor(() => page(`const cs = $$("[data-brand-card]"); return cs.length <= 1 && cs.every((c) => c.querySelector("h3").textContent.trim() === "Sofra Pide") && ${sectionCount("cw-planner")} < ${dash?.planner || 0};`), 5000).catch(() => false);
+  check("Marka seçilince tüm bölümler yalnızca o markayı gösterir", one);
   await page(`byText("aside button", "Tüm Markalar").click(); return true;`);
-  check("Tüm Markalar'a dönünce liste yine yüklenmez", await waitFor(() => page(`return !$("[data-brand-card]") && !!$("[data-dashboard-hint]");`), 5000).catch(() => false));
+  check("Tüm Markalar'a dönünce sayılar eski hâline döner", await waitFor(() => page(`return ${sectionCount("cw-daily")} === ${dash?.daily ?? -1} && ${sectionCount("cw-planner")} === ${dash?.planner ?? -1};`), 5000).catch(() => false));
   await page(`setValue($("input[aria-label='Genel arama']"), "Sofra Pide");`);
   check("Arama yapılınca sonuç kartları listelenir", await waitFor(() => page(`return $$("[data-brand-card]").length > 0;`), 5000).catch(() => false));
   await page(`setValue($("input[aria-label='Genel arama']"), ""); window.__CW_ALL_BRANDS__ = true; return true;`);

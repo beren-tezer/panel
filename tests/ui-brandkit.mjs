@@ -9,15 +9,14 @@ const kit = (id = "b-sofra") => `$("[data-brand-kit='${id}']")`;
 try {
   await viewport(1440, 900);
   await send("Page.navigate", { url: h.url });
-  await waitFor(() => page(`return $$("[data-brand-card]").length > 0;`));
+  await waitFor(() => page(`return $$("[data-brand-card]").length > 0;`), 45000); // ilk derleme (büyük JSX) yavaş olabilir
 
   /* ── Erişim noktaları ── */
   const entry = await page(`return {
     nav: !!$$("aside button").find((b) => b.textContent.includes("Marka Kılavuzu")),
-    tab: !!$$("[role='tab']").find((b) => b.textContent.includes("Marka Kılavuzu")),
     card: !!$("[data-brand-card] footer button[title='Marka kılavuzu']"),
   };`);
-  check("Kılavuza menü, sekme ve marka kartından erişilir", entry.nav && entry.tab && entry.card, JSON.stringify(entry));
+  check("Kılavuza menüden ve marka kartından erişilir", entry.nav && entry.card, JSON.stringify(entry));
   await page(`$$("aside button").find((b) => b.textContent.includes("Marka Kılavuzu")).click();`);
   await waitFor(() => page(`return !!byText("button", "Kılavuzu Aç");`));
   await page(`$$("button").find((b) => b.textContent.includes("Sofra Pide") && b.textContent.includes("Kılavuzu Aç")).click();`);
@@ -80,10 +79,10 @@ try {
   const warn = await waitFor(() => page(`return !!byText("form[aria-label='Yeni Drive bağlantısı'] [role='alert']", "Kaydedilmemiş değişiklikler silinecek");`), 2000).catch(() => false);
   await page(`exact("button", "Düzenlemeye Dön").click();`);
   check("Vazgeçerken kaydedilmemiş değişiklik uyarısı çıkar", warn);
-  await page(`$$("[role='tab']").find((b) => b.textContent.includes("İçerik Tablosu")).click();`);
+  await page(`$$("aside button").find((b) => b.textContent.includes("Genel Bakış")).click();`);
   await sleep(200);
-  await page(`$$("[role='tab']").find((b) => b.textContent.includes("Marka Kılavuzu")).click();`);
-  check("Sekme değişince taslak korunur", await waitFor(() => page(`const i = $("form[aria-label='Yeni Drive bağlantısı'] input[placeholder='örn. Kurumsal Drive']"); return i && i.value === "Taslak bağlantı";`), 3000).catch(() => false));
+  await page(`$$("aside button").find((b) => b.textContent.includes("Marka Kılavuzu")).click();`);
+  check("Sayfa değişince taslak korunur", await waitFor(() => page(`const i = $("form[aria-label='Yeni Drive bağlantısı'] input[placeholder='örn. Kurumsal Drive']"); return i && i.value === "Taslak bağlantı";`), 3000).catch(() => false));
 
   /* ── Drive bağlantısı ── */
   await page(`setValue($("form[aria-label='Yeni Drive bağlantısı'] input[inputmode='url']"), "https://example.com/dosya");`);
@@ -123,7 +122,7 @@ try {
 
   /* ── Görev içinden hızlı erişim ── */
   await page(`$$("aside button").find((b) => b.textContent.includes("Sofra Pide")).click();`);
-  await page(`$$("[role='tab']").find((b) => b.textContent.includes("Günlük Akış")).click();`);
+  await page(`$$("aside button").find((b) => b.textContent.trim().startsWith("Genel Bakış")).click();`);
   await waitFor(() => page(`return $$("[data-task-row]").length > 0;`));
   const taskTitle = await page(`const r = $("[data-task-row]"); const st = $("button[aria-label^='Durum']", r)?.textContent || ""; r.querySelector("button").click(); return { title: r.querySelector("button").textContent.trim(), status: st };`);
   await waitFor(() => page(`return !!$("aside[aria-label='Görev detayı']");`));
@@ -149,7 +148,7 @@ try {
   check("Mobilde kılavuz paneli tam ekran, taşma yok", mob && mob.full && mob.overflow <= 0, JSON.stringify(mob));
   await page(`$("button[aria-label='Kılavuzu kapat']").click();`);
   await page(`$("button[aria-label='Detayı kapat']").click();`);
-  await page(`$$("[role='tab']").find((b) => b.textContent.includes("Marka Kılavuzu")).click();`);
+  await page(`$$("aside button").find((b) => b.textContent.includes("Marka Kılavuzu")).click();`);
   await waitFor(() => page(`return !!${kit()};`));
   for (const [w, hh] of [[375, 812], [768, 1024], [1024, 768], [1920, 1080]]) {
     await viewport(w, hh, w < 768);
@@ -187,7 +186,7 @@ try {
   check("Marka yönetiminden kılavuza geçilir", await waitFor(() => page(`return !!$("[data-brand-kit]");`), 4000).catch(() => false));
 
   /* ── Mevcut akışlar bozulmadı ── */
-  await page(`$$("[role='tab']").find((b) => b.textContent.includes("Günlük Akış")).click();`);
+  await page(`$$("aside button").find((b) => b.textContent.trim().startsWith("Genel Bakış")).click();`);
   check("Günlük akış ve marka kartları çalışıyor", await waitFor(() => page(`return $$("[data-brand-card]").length > 0;`), 4000).catch(() => false));
 
   await sleep(300);

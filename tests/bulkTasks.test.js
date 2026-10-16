@@ -154,3 +154,21 @@ test("taslak: kullanıcı ve çalışma alanı bazında, kaydedilenler ve boşla
   assert.equal(loadDraft(st, k1), null);
   assert.equal(saveDraft({ setItem() { throw new Error("dolu"); }, removeItem() {} }, k1, rows), -1);
 });
+
+test("görev türü bağlamı: genel tablo yalnızca genel türleri, sosyal medya tablosu sosyal medya türlerini kabul eder", () => {
+  const general = { ...ctx, formats: ["Web & Teknik", "Ajans İçi İşler", "Reklam İşleri"], defaults: { format: "Web & Teknik" } };
+  const social = { ...ctx, formats: ["Reels", "Gönderi", "Hikâye", "Karusel", "Video"], defaults: { format: "Reels" } };
+  assert.equal(newRow(null, general.defaults).format, "Web & Teknik");
+  assert.deepEqual(resolveFormat("web", general.formats), { value: "Web & Teknik" });
+  assert.deepEqual(resolveFormat("Reklam", general.formats), { value: "Reklam İşleri" });
+  assert.deepEqual(resolveFormat("ajans içi", general.formats), { value: "Ajans İçi İşler" });
+  assert.deepEqual(resolveFormat("Reels", general.formats), { bad: "Reels" }, "genel tabloda sosyal medya türü yok");
+  assert.deepEqual(resolveFormat("web", social.formats), { bad: "web" });
+  assert.deepEqual(resolveFormat("story", social.formats), { value: "Hikâye" });
+  const row = { ...newRow(null, general.defaults), brandId: "b1", title: "Site bakımı", dueDate: TODAY };
+  assert.deepEqual(validateSheet([row], general).errors, {});
+  assert.match(validateSheet([{ ...row, format: "Reels" }], general).errors[row.id].format, /Görev türü seçilmedi/);
+  assert.equal(clearCell(row, "format", general.defaults).format, "Web & Teknik");
+  const res = applyPaste([newRow(null, general.defaults)], { row: 0, col: "brand" }, [["Marka", "Görev", "Görev Türü", "Teslim Tarihi"], ["Sofra Pide", "Kampanya", "reklam", "12.10.2026"]], general);
+  assert.equal(res.rows[0].format, "Reklam İşleri", "başlık satırında Görev Türü tanınır");
+});

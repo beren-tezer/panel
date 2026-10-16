@@ -10,7 +10,7 @@ import {
   MAX_BRAND_FILE_BYTES, VISIBILITY, createBrandKitStore, createMemoryBrandKit, formatBytes, normalizeHex, validateDriveUrl, validateHttpsUrl, validateUpload,
 } from "./brandKit.js";
 import {
-  BULK_COLUMNS, BULK_FORMATS, BULK_PLATFORMS, MAX_BULK_ROWS, applyPaste as bulkApplyPaste, carryFrom as bulkCarry, cellText as bulkCellText,
+  BULK_COLUMNS, BULK_PLATFORMS, MAX_BULK_ROWS, applyPaste as bulkApplyPaste, carryFrom as bulkCarry, cellText as bulkCellText,
   clearCell as bulkClearCell, clearDraft as bulkClearDraft, draftKey, duplicateRow as bulkDuplicate, isEmptyRow as bulkIsEmpty, loadDraft,
   newRow as bulkNewRow, parseTSV as bulkParseTSV, parseTable as bulkParseTable, saveDraft as bulkSaveDraft, setCell as bulkSetCell,
   setValue as bulkSetValueRaw, toTask as bulkToTask, validateRow as bulkValidateRow,
@@ -20,8 +20,12 @@ import {
   rotatedSlug, slugify, validateContentFile, validateRevisionNote, versionStatus, versionsOf,
 } from "./approvals.js";
 import {
-  EMPLOYEE_BOXES, OPS_BOXES, REVISION_LABELS, deadlineInfo, employeeBox, isPendingRevision, normalizeTime, opsBox, opsMetrics, planDate, revisionInfo, wallClock, weekOfMonth,
+  EMPLOYEE_BOXES, OPS_BOXES, REVISION_LABELS, deadlineInfo, employeeBox, isPendingRevision, normalizeTime, opsBox, planDate, revisionInfo, wallClock, weekOfMonth,
 } from "./taskIndicators.js";
+import {
+  GENERAL_TASK_TYPES, LEGACY_TASK_TYPES, SOCIAL_MEDIA_TASK_TYPES, TASK_CONTEXTS, TASK_TYPE_LABEL, TYPE_FOR_CATEGORY, contextOfType, defaultTaskType,
+  platformForType, taskTypeOptions, taskTypesFor,
+} from "./taskTypes.js";
 import {
   CHECK_CATEGORIES, CREATIVE_TASK_TYPES, DEFAULT_TEMPLATE_ITEMS, LOCKED_STATUSES, MAX_TEMPLATE_ITEMS, REVIEW_STATUSES, TASK_TYPES,
   checklistSummary, createMemoryChecklist, currentChecklist, cycleLabel, demoTemplates, incompleteMessage, indexChecklists, itemsOf,
@@ -220,7 +224,6 @@ const PLATFORM_DOT = {
   Instagram: "bg-pink-500", TikTok: "bg-slate-900", Facebook: "bg-blue-600", LinkedIn: "bg-sky-700",
   YouTube: "bg-red-600", "Web Sitesi": "bg-emerald-600", "Meta Reklam": "bg-indigo-500", "Google Reklam": "bg-amber-500",
 };
-const FORMATS = ["Reels", "Gönderi", "Hikâye", "Karusel", "Video", "Web", "Reklam", "Rapor"];
 
 const BRAND_COLORS = {
   orange: { tile: "bg-orange-100 text-orange-700", bar: "bg-orange-500", hex: ["#fb923c", "#c2410c"] },
@@ -434,7 +437,7 @@ const COMMENT_TEXTS = [
 ];
 
 function seedDescription(brief, format, brand) {
-  return `<p><strong>Brief:</strong> ${escHtml(brief)}</p><ul><li>Marka kimlik rehberindeki renk ve tipografi kullanılacak.</li><li>${escHtml(format)} formatına uygun ölçüler ve güvenli alanlar kontrol edilecek.</li><li>Yayın öncesi yönetici onayı alınacak.</li></ul><p>Referans: <a href="${DRIVE.folder(brand.driveFolderId)}" target="_blank" rel="noopener noreferrer">${escHtml(brand.name)} Drive klasörü</a></p>`;
+  return `<p><strong>Brief:</strong> ${escHtml(brief)}</p><ul><li>Marka kimlik rehberindeki renk ve tipografi kullanılacak.</li><li>${escHtml(format)} türüne uygun ölçüler ve güvenli alanlar kontrol edilecek.</li><li>Yayın öncesi yönetici onayı alınacak.</li></ul><p>Referans: <a href="${DRIVE.folder(brand.driveFolderId)}" target="_blank" rel="noopener noreferrer">${escHtml(brand.name)} Drive klasörü</a></p>`;
 }
 
 /* Demo kontrol listesi şablonları: tüm markalar için varsayılan + Tepe Emlak'a özel sosyal medya listesi. */
@@ -606,7 +609,7 @@ function createDemoState(checklistApi) {
 /* ───────────────────────── Merkezi durum (reducer) ───────────────────────── */
 
 const FIELD_LABELS = {
-  status: "durumu", priority: "önceliği", assigneeId: "sorumluyu", platform: "platformu", format: "formatı",
+  status: "durumu", priority: "önceliği", assigneeId: "sorumluyu", platform: "platformu", format: "görev türünü",
   dueDate: "son teslim tarihini", dueTime: "teslim saatini", publishDate: "yayın tarihini", brandId: "markayı", title: "başlığı",
   checklistDisabled: "kontrol listesini",
 };
@@ -1256,11 +1259,13 @@ function BrandMenu({ value, onChange }) {
   );
 }
 
-function FormatMenu({ value, onChange }) {
+/* Görev Türü: mevcut görev kendi ailesinin listesiyle düzenlenir (sosyal medya içeriği → sosyal medya türleri, diğerleri →
+   genel türler); listede olmayan eski değer kaybolmaz (taskTypes.js taskTypeOptions). */
+function TaskTypeMenu({ value, onChange }) {
   return (
     <SelectMenu
-      value={value} onChange={onChange} title="Format" width={170} ariaLabel="Format seç"
-      options={FORMATS.map((f) => ({ value: f, label: f }))}
+      value={value} onChange={onChange} title={TASK_TYPE_LABEL} width={170} ariaLabel={`${TASK_TYPE_LABEL} seç`}
+      options={taskTypeOptions(contextOfType(value), value).map((f) => ({ value: f, label: f }))}
       triggerClassName="px-1 py-0.5 -mx-1 hover:bg-slate-100"
       renderTrigger={(v) => <span className="inline-flex items-center h-5 px-1.5 rounded-md bg-slate-100 text-slate-600 cw-10 font-semibold uppercase tracking-wide">{v}</span>}
     />
@@ -1492,7 +1497,7 @@ const shortName = (name) => {
 
 /* ───────────────────────── Kenar çubuğu ───────────────────────── */
 
-function Sidebar({ open, onClose, navItems, activeNav, onNav, counts, selectedBrandId, onSelectBrand, onNewBrand, onMyTasks, onResetFilters, onSignOut, onChangePassword, switcher }) {
+function Sidebar({ open, onClose, navItems, activeNav, onNav, counts, selectedBrandId, onSelectBrand, onHome, onNewBrand, onMyTasks, onResetFilters, onSignOut, onChangePassword, switcher }) {
   const { state } = useWS();
   const [q, setQ] = useState("");
   const [profileAnchor, setProfileAnchor] = useState(null);
@@ -1521,11 +1526,14 @@ function Sidebar({ open, onClose, navItems, activeNav, onNav, counts, selectedBr
         aria-label="Ana menü"
       >
         <div className="h-16 shrink-0 flex items-center gap-2.5 px-4 border-b border-slate-100">
-          <LogoMark />
-          <div className="flex-1 min-w-0 leading-tight">
-            <p className="cw-13 font-bold tracking-tight text-slate-900">AgencyOS</p>
-            <p className="cw-10 text-slate-400 font-medium">Ajans İşletim Sistemi</p>
-          </div>
+          <button type="button" onClick={onHome} aria-label="AgencyOS — ana sayfaya dön (tüm markalar)" title="Ana sayfaya dön" data-home-link=""
+            className="flex-1 min-w-0 flex items-center gap-2.5 -mx-1.5 px-1.5 py-1 rounded-lg text-left cursor-pointer hover:bg-slate-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300">
+            <LogoMark />
+            <span className="flex-1 min-w-0 leading-tight">
+              <span className="block cw-13 font-bold tracking-tight text-slate-900">AgencyOS</span>
+              <span className="block cw-10 text-slate-400 font-medium">Ajans İşletim Sistemi</span>
+            </span>
+          </button>
           <button type="button" onClick={onClose} className="lg:hidden p-1.5 rounded-md text-slate-500 hover:bg-slate-100" aria-label="Menüyü kapat"><X size={17} /></button>
         </div>
 
@@ -1966,7 +1974,7 @@ function BrandCard({ brand, tasks, onFocusBrand }) {
   );
 }
 
-function DailyFeed({ brands, tasks, hasActiveFilters, onClear, onFocusBrand }) {
+function DailyFeed({ brands, tasks, hasActiveFilters, onClear, onFocusBrand, emptyTitle, emptyText }) {
   const { openNewTask, can: allowed } = useWS();
   const groups = brands
     .map((b) => ({ brand: b, tasks: tasks.filter((t) => t.brandId === b.id) }))
@@ -1975,8 +1983,8 @@ function DailyFeed({ brands, tasks, hasActiveFilters, onClear, onFocusBrand }) {
     return (
       <EmptyBlock
         icon={Search}
-        title="Bu kriterlere uygun görev bulunamadı"
-        text="Filtreleri değiştirerek veya arama ifadesini temizleyerek tekrar deneyebilirsiniz."
+        title={emptyTitle || "Bu kriterlere uygun görev bulunamadı"}
+        text={emptyText || "Filtreleri değiştirerek veya arama ifadesini temizleyerek tekrar deneyebilirsiniz."}
         action={hasActiveFilters ? <Btn variant="secondary" onClick={onClear}>Filtreleri Temizle</Btn> : allowed("canCreateTasks") ? <Btn variant="primary" onClick={() => openNewTask()}><Plus size={14} />Yeni Görev</Btn> : null}
       />
     );
@@ -2042,6 +2050,7 @@ function ContentTable({ tasks, sort, setSort, defaultBrandId, dueDefault, isVisi
   const canAssign = allowed("canAssignTasks"), canEdit = allowed("canEditContent");
   const [quickBrand, setQuickBrand] = useState(defaultBrandId);
   const [quickTitle, setQuickTitle] = useState("");
+  const [quickType, setQuickType] = useState(() => defaultTaskType(TASK_CONTEXTS.general));
   useEffect(() => { setQuickBrand(defaultBrandId); }, [defaultBrandId]);
   const headerSort = (key) => {
     if (!key) return;
@@ -2051,7 +2060,7 @@ function ContentTable({ tasks, sort, setSort, defaultBrandId, dueDefault, isVisi
     const title = quickTitle.trim();
     if (!title || !quickBrand) return;
     const now = new Date().toISOString();
-    const task = { id: uid(), code: null, brandId: quickBrand, title, platform: "Instagram", format: "Gönderi", assigneeId: "", status: "Başlanmadı", priority: "Orta", publishDate: dueDefault, dueDate: dueDefault, dueTime: "", description: "", createdAt: now, updatedAt: now };
+    const task = { id: uid(), code: null, brandId: quickBrand, title, platform: platformForType(quickType), format: quickType, assigneeId: "", status: "Başlanmadı", priority: "Orta", publishDate: dueDefault, dueDate: dueDefault, dueTime: "", description: "", createdAt: now, updatedAt: now };
     if (!dispatch({ type: "ADD_TASK", task })) return;
     setQuickTitle("");
     notify(isVisible(task) ? "Görev eklendi." : "Görev eklendi ancak mevcut filtreler nedeniyle listede görünmüyor.", isVisible(task) ? "success" : "info");
@@ -2122,7 +2131,14 @@ function ContentTable({ tasks, sort, setSort, defaultBrandId, dueDefault, isVisi
                   <Btn size="sm" variant="primary" disabled={!quickTitle.trim()} onClick={quickAdd}>Ekle</Btn>
                 </div>
               </td>
-              <td colSpan={COLUMNS.length - 4} className="px-3 py-2 cw-11 text-slate-400">Varsayılan: Instagram · Başlanmadı · {relDay(dueDefault)}</td>
+              <td colSpan={COLUMNS.length - 4} className="px-3 py-2">
+                <div className="flex items-center gap-2 cw-11 text-slate-400">
+                  <select value={quickType} onChange={(e) => setQuickType(e.target.value)} aria-label={`Yeni görev ${TASK_TYPE_LABEL.toLocaleLowerCase("tr-TR")}`} title={TASK_TYPE_LABEL} className="h-8 w-40 shrink-0 rounded-md border border-slate-200 bg-white px-2 cw-12 text-slate-700 outline-none focus:border-orange-400">
+                    {GENERAL_TASK_TYPES.map((p) => <option key={p}>{p}</option>)}
+                  </select>
+                  <span className="truncate">Varsayılan: {platformForType(quickType)} · Başlanmadı · {relDay(dueDefault)}</span>
+                </div>
+              </td>
             </tr>}
           </tbody>
         </table>
@@ -2760,7 +2776,7 @@ function TaskDrawer({ task, focus, focusKey, onClose }) {
               <PropertyRow icon={Users} label="Sorumlu">{canAssign ? <AssigneeMenu value={task.assigneeId} onChange={(v) => updateTask(task.id, { assigneeId: v }, "Sorumlu güncellendi.")} /> : <span className="inline-flex items-center gap-1.5"><Avatar userId={task.assigneeId} size={22} /><span className="cw-12 font-medium text-slate-700">{USER_BY_ID[task.assigneeId]?.name || "Atanmamış"}</span></span>}</PropertyRow>
               <PropertyRow icon={Layers} label="Marka">{canAssign ? <BrandMenu value={task.brandId} onChange={(v) => updateTask(task.id, { brandId: v }, "Marka güncellendi.")} /> : <span className="inline-flex items-center gap-1.5"><BrandLogo brand={brand} size={22} /><span className="cw-12 font-medium text-slate-700">{brand?.name}</span></span>}</PropertyRow>
               <PropertyRow icon={LayoutGrid} label="Platform">{canEdit ? <PlatformMenu value={task.platform} onChange={(v) => updateTask(task.id, { platform: v }, "Platform güncellendi.")} /> : <PlatformChip platform={task.platform} />}</PropertyRow>
-              <PropertyRow icon={Type} label="Format">{canEdit ? <FormatMenu value={task.format} onChange={(v) => updateTask(task.id, { format: v }, "Format güncellendi.")} /> : <span className="cw-12 text-slate-700">{task.format}</span>}</PropertyRow>
+              <PropertyRow icon={Type} label={TASK_TYPE_LABEL}>{canEdit ? <TaskTypeMenu value={task.format} onChange={(v) => updateTask(task.id, { format: v }, "Görev türü güncellendi.")} /> : <span className="cw-12 text-slate-700">{task.format}</span>}</PropertyRow>
               <PropertyRow icon={Calendar} label="Yayın Tarihi"><div className="w-44">{canEdit ? <DateInput value={task.publishDate} onChange={(v) => updateTask(task.id, { publishDate: v }, "Yayın tarihi güncellendi.")} /> : readDate(task.publishDate)}</div></PropertyRow>
               <PropertyRow icon={Clock} label="Son Teslim">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
@@ -2856,11 +2872,16 @@ function Field({ label, error, children, full, group }) {
 }
 const inputCls = (err) => `h-9 w-full rounded-lg border px-3 cw-13 outline-none bg-white focus:ring-2 ${err ? "border-red-300 focus:ring-red-100" : "border-slate-200 focus:border-orange-400 focus:ring-orange-100"}`;
 
-function NewTaskModal({ presetBrandId, defaultDate, onClose, onCreated }) {
+/* context: "social" (Sosyal Medya Planı) | "general" (diğer her yer) — görev türü seçenekleri buna göre (taskTypes.js).
+   presetType: modülün ön seçimi (ör. "Web & Teknik" kutusundan açılınca). */
+function NewTaskModal({ presetBrandId, defaultDate, context = TASK_CONTEXTS.general, presetType, onClose, onCreated }) {
   const { state } = useWS();
-  const [form, setForm] = useState({
-    title: "", brandId: presetBrandId || state.brands[0]?.id || "", platform: "Instagram", format: "Gönderi", assigneeId: "",
-    status: "Başlanmadı", priority: "Orta", publishDate: defaultDate, dueDate: defaultDate, dueTime: "", description: "",
+  const [form, setForm] = useState(() => {
+    const format = defaultTaskType(context, presetType);
+    return {
+      title: "", brandId: presetBrandId || state.brands[0]?.id || "", platform: platformForType(format), format, assigneeId: "",
+      status: "Başlanmadı", priority: "Orta", publishDate: defaultDate, dueDate: defaultDate, dueTime: "", description: "",
+    };
   });
   const [errors, setErrors] = useState({});
   const set = (k, v) => { setForm((f) => ({ ...f, [k]: v })); setErrors((e) => ({ ...e, [k]: "" })); };
@@ -2901,8 +2922,8 @@ function NewTaskModal({ presetBrandId, defaultDate, onClose, onCreated }) {
         <Field label="Platform">
           <select value={form.platform} onChange={(e) => set("platform", e.target.value)} className={inputCls()}>{PLATFORMS.map((p) => <option key={p}>{p}</option>)}</select>
         </Field>
-        <Field label="Format">
-          <select value={form.format} onChange={(e) => set("format", e.target.value)} className={inputCls()}>{FORMATS.map((p) => <option key={p}>{p}</option>)}</select>
+        <Field label={TASK_TYPE_LABEL}>
+          <select value={form.format} onChange={(e) => set("format", e.target.value)} aria-label={TASK_TYPE_LABEL} data-task-type-select={context} className={inputCls()}>{taskTypesFor(context).map((p) => <option key={p}>{p}</option>)}</select>
         </Field>
         <Field label="Durum">
           <select value={form.status} onChange={(e) => set("status", e.target.value)} className={inputCls()}>{STATUSES.map((p) => <option key={p}>{p}</option>)}</select>
@@ -3133,8 +3154,8 @@ function SheetCard({ row, index, errors, showErrors, checked, lists, update, han
           <textarea value={row.title} rows={2} maxLength={300} onChange={(e) => update(row.id, (r) => ({ ...r, title: e.target.value.replace(/\n/g, " ") }), "title")} placeholder="Görev başlığı" className={`${fieldCls("title")} h-auto py-2 resize-none`} />) })}</div>
         {F({ k: "platform", label: "Platform", children: (
           <select value={row.platform} onChange={(e) => update(row.id, (r) => bulkSetValue(r, "platform", e.target.value))} className={fieldCls("platform")}>{BULK_PLATFORMS.map((p) => <option key={p}>{p}</option>)}</select>) })}
-        {F({ k: "format", label: "Format", children: (
-          <select value={row.format} onChange={(e) => update(row.id, (r) => bulkSetValue(r, "format", e.target.value))} className={fieldCls("format")}>{BULK_FORMATS.map((p) => <option key={p}>{p}</option>)}</select>) })}
+        {F({ k: "format", label: TASK_TYPE_LABEL, children: (
+          <select value={row.format} onChange={(e) => update(row.id, (r) => bulkSetValue(r, "format", e.target.value))} className={fieldCls("format")}>{taskTypeOptions(contextOfType(lists.ctx.formats[0]), row.format).map((p) => <option key={p}>{p}</option>)}</select>) })}
         {F({ k: "dueDate", label: "Teslim Tarihi", children: (
           <input type="date" value={row.dueDate} onChange={(e) => update(row.id, (r) => bulkSetValue(r, "dueDate", e.target.value))} className={fieldCls("dueDate")} />) })}
         {F({ k: "dueTime", label: "Teslim Saati", children: (
@@ -3189,7 +3210,7 @@ function PasteDialog({ onClose, onPaste }) {
     <Modal title="Excel / E-Tablolar'dan Yapıştır" subtitle="Satırlar tablonun sonuna eklenir. Başlık satırı varsa sütunlar adlarına göre eşleştirilir." onClose={onClose} width={640}
       footer={<><Btn variant="ghost" onClick={onClose}>Vazgeç</Btn><Btn variant="primary" disabled={!text.trim()} onClick={() => onPaste(text)}><ClipboardList size={14} />Tabloya Ekle</Btn></>}>
       <textarea autoFocus value={text} onChange={(e) => setText(e.target.value)} rows={9} spellCheck={false} aria-label="Yapıştırılacak veri"
-        placeholder={"Marka\tGörev Başlığı\tPlatform\tFormat\tTeslim Tarihi\tTeslim Saati\tAtanan Kişi\nSofra Pide\tKasım menüsü Reels\tInstagram\tReels\t12.11.2026\t16:30\tBurak"}
+        placeholder={"Marka\tGörev Başlığı\tPlatform\tGörev Türü\tTeslim Tarihi\tTeslim Saati\tAtanan Kişi\nSofra Pide\tKasım menüsü Reels\tInstagram\tReels\t12.11.2026\t16:30\tBurak"}
         className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 font-mono cw-12 outline-none focus:bg-white focus:border-orange-400 focus:ring-2 focus:ring-orange-100 resize-y" />
       <p className="mt-2 cw-11 text-slate-500">Excel, Google E-Tablolar (sekme ayrımlı), Markdown tablosu veya ; / , ayrımlı metin desteklenir.</p>
     </Modal>
@@ -3198,28 +3219,35 @@ function PasteDialog({ onClose, onPaste }) {
 
 const bulkSetValue = (row, key, value) => (value === "" && (key === "brand" || key === "assignee" || key === "dueDate" || key === "dueTime") ? bulkClearCell(row, key) : bulkSetValueRaw(row, key, value));
 
-function BulkTaskSheet({ draftScope, createTasks, onClose }) {
+/* context: "social" → Sosyal Medya Planından açıldı (sosyal medya türleri); "general" → diğer yerler (genel görev türleri).
+   Taslaklar bağlam bazında ayrı tutulur (sosyal medya tablosu önceki taslak anahtarını kullanır). */
+const bulkDraftKey = (draftScope, userId, context) => draftKey(`${draftScope || "yerel"}${context === TASK_CONTEXTS.social ? "" : ":genel"}`, userId);
+
+function BulkTaskSheet({ draftScope, createTasks, onClose, context = TASK_CONTEXTS.general }) {
   const { state, actor, notify, openTask, brandsById } = useWS();
   const isMobile = useMediaQuery("(max-width: 639px)");
   const storage = useMemo(sheetStorage, []);
-  const key = draftKey(draftScope || "yerel", actor.id);
+  const key = bulkDraftKey(draftScope, actor.id, context);
+  const formats = taskTypesFor(context);
+  const rowDefaults = useMemo(() => ({ format: defaultTaskType(context) }), [context]);
+  const newRow = useCallback((carryRow = null) => bulkNewRow(carryRow, rowDefaults), [rowDefaults]);
   const lists = useMemo(() => {
     const brands = [...state.brands].sort((a, b) => a.name.localeCompare(b.name, "tr"));
     const users = assignableUsers(state).sort((a, b) => a.name.localeCompare(b.name, "tr"));
     return {
       brands, users, brandById: Object.fromEntries(brands.map((b) => [b.id, b])), userById: Object.fromEntries(users.map((u) => [u.id, u])),
-      ctx: { brands, users, today: TODAY },
+      ctx: { brands, users, today: TODAY, formats, defaults: rowDefaults },
       options: {
         brand: brands.map((b) => ({ value: b.id, label: b.name, sub: b.sector, icon: <BrandLogo brand={b} size={18} /> })),
         assignee: [{ value: "", label: "Atanmamış" }, ...users.map((u) => ({ value: u.id, label: u.name, sub: userTitle(u), icon: <Avatar userId={u.id} size={18} /> }))],
         platform: BULK_PLATFORMS.map((p) => ({ value: p, label: p })),
-        format: BULK_FORMATS.map((p) => ({ value: p, label: p })),
+        format: formats.map((p) => ({ value: p, label: p })),
       },
     };
-  }, [state]);
+  }, [state, formats, rowDefaults]);
 
   const [draft, setDraft] = useState(() => loadDraft(storage, key));
-  const [sheet, send] = useReducer(sheetReducer, null, () => ({ rows: Array.from({ length: INITIAL_ROWS }, () => bulkNewRow()), past: [], future: [] }));
+  const [sheet, send] = useReducer(sheetReducer, null, () => ({ rows: Array.from({ length: INITIAL_ROWS }, () => newRow()), past: [], future: [] }));
   const rows = sheet.rows;
   const [sel, setSel] = useState({ row: 0, col: 0 });
   const [anchor, setAnchor] = useState(null); // aralık seçimi başlangıcı
@@ -3285,7 +3313,7 @@ function BulkTaskSheet({ draftScope, createTasks, onClose }) {
     let added = 0;
     setRows((rs) => {
       const out = [...rs];
-      for (let i = 0; i < n && out.length < MAX_BULK_ROWS; i++) { out.push(bulkNewRow(carry ? bulkCarry(out[out.length - 1]) : null)); added++; }
+      for (let i = 0; i < n && out.length < MAX_BULK_ROWS; i++) { out.push(newRow(carry ? bulkCarry(out[out.length - 1]) : null)); added++; }
       return out;
     });
     if (rowsRef.current.length + n > MAX_BULK_ROWS) notify(`Bir seferde en fazla ${MAX_BULK_ROWS} satır girilebilir.`, "error");
@@ -3301,12 +3329,12 @@ function BulkTaskSheet({ draftScope, createTasks, onClose }) {
       row += dir === "down" ? 1 : -1;
       if (row >= rs.length) {
         if (rs.length >= MAX_BULK_ROWS) return;
-        setRows((x) => [...x, bulkNewRow(carry ? bulkCarry(x[x.length - 1]) : null)]); // Enter son satırda: yeni satır
+        setRows((x) => [...x, newRow(carry ? bulkCarry(x[x.length - 1]) : null)]); // Enter son satırda: yeni satır
       }
       row = Math.max(0, row);
     } else if (dir === "right" || dir === "left") {
       col += dir === "right" ? 1 : -1;
-      if (col > LAST_COL) { col = 0; row += 1; if (row >= rs.length) { if (rs.length >= MAX_BULK_ROWS) return; setRows((x) => [...x, bulkNewRow(carry ? bulkCarry(x[x.length - 1]) : null)]); } }
+      if (col > LAST_COL) { col = 0; row += 1; if (row >= rs.length) { if (rs.length >= MAX_BULK_ROWS) return; setRows((x) => [...x, newRow(carry ? bulkCarry(x[x.length - 1]) : null)]); } }
       if (col < 0) { if (row === 0) col = 0; else { col = LAST_COL; row -= 1; } }
     } else if (dir === "arrowRight") col = Math.min(LAST_COL, col + 1);
     else if (dir === "arrowLeft") col = Math.max(0, col - 1);
@@ -3360,10 +3388,10 @@ function BulkTaskSheet({ draftScope, createTasks, onClose }) {
     setRows((rs) => rs.map((x, i) => {
       if (i < r0 || i > r1 || x.saved) return x;
       let y = x;
-      for (let c = c0; c <= c1; c++) y = bulkClearCell(y, SHEET_COLS[c].key);
+      for (let c = c0; c <= c1; c++) y = bulkClearCell(y, SHEET_COLS[c].key, rowDefaults);
       return y;
     }));
-  }, [range, setRows]);
+  }, [range, setRows, rowDefaults]);
 
   const pasteMatrix = useCallback((matrix, at) => {
     if (!matrix.length) return;
@@ -3394,7 +3422,7 @@ function BulkTaskSheet({ draftScope, createTasks, onClose }) {
 
   const removeRows = useCallback((ids) => {
     const set = new Set(ids);
-    setRows((rs) => { const out = rs.filter((r) => !set.has(r.id)); return out.length ? out : [bulkNewRow()]; });
+    setRows((rs) => { const out = rs.filter((r) => !set.has(r.id)); return out.length ? out : [newRow()]; });
     setChecked((c) => { const n = new Set(c); ids.forEach((id) => n.delete(id)); return n; });
     const left = Math.max(1, rowsRef.current.filter((r) => !set.has(r.id)).length);
     setSel((s) => ({ row: Math.min(s.row, left - 1), col: s.col }));
@@ -3489,9 +3517,9 @@ function BulkTaskSheet({ draftScope, createTasks, onClose }) {
     }
   };
 
-  const restoreDraft = () => { send({ type: "reset", rows: [...draft.rows, bulkNewRow(carry ? bulkCarry(draft.rows[draft.rows.length - 1]) : null)] }); setDraft(null); setSel({ row: 0, col: 0 }); setTimeout(focusGrid, 0); };
+  const restoreDraft = () => { send({ type: "reset", rows: [...draft.rows, newRow(carry ? bulkCarry(draft.rows[draft.rows.length - 1]) : null)] }); setDraft(null); setSel({ row: 0, col: 0 }); setTimeout(focusGrid, 0); };
   const discardDraft = () => { bulkClearDraft(storage, key); setDraft(null); setTimeout(focusGrid, 0); };
-  const clearAll = () => { bulkClearDraft(storage, key); send({ type: "reset", rows: Array.from({ length: INITIAL_ROWS }, () => bulkNewRow()) }); setChecked(new Set()); setShowErrors(false); setSaveError(null); setConfirmClear(false); setDraftAt(null); setSel({ row: 0, col: 0 }); notify("Taslak temizlendi."); };
+  const clearAll = () => { bulkClearDraft(storage, key); send({ type: "reset", rows: Array.from({ length: INITIAL_ROWS }, () => newRow()) }); setChecked(new Set()); setShowErrors(false); setSaveError(null); setConfirmClear(false); setDraftAt(null); setSel({ row: 0, col: 0 }); notify("Taslak temizlendi."); };
   const close = () => { if (unsaved) notify(`Kaydedilmemiş ${unsaved} satır taslak olarak saklandı.`, "info"); onClose(); };
 
   const editor = editing && (() => {
@@ -3522,7 +3550,7 @@ function BulkTaskSheet({ draftScope, createTasks, onClose }) {
             onChange={(v) => addRows(Number(v))} triggerClassName="h-8 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50"
             renderTrigger={() => <span className="inline-flex items-center gap-1 cw-12 font-semibold text-slate-700"><Layers size={13} />Satır ekle<ChevronDown size={12} /></span>} />
           <Btn size="sm" variant="secondary" onClick={() => setPasteOpen(true)} disabled={!!draft}><ClipboardList size={13} /><span className="hidden sm:inline">Excel'den </span>Yapıştır</Btn>
-          <label className="inline-flex items-center gap-1.5 h-8 px-1.5 cw-12 text-slate-600 cursor-pointer select-none" title="Yeni satırda önceki satırın marka, platform, format ve kişisi kullanılır (başlık hariç).">
+          <label className="inline-flex items-center gap-1.5 h-8 px-1.5 cw-12 text-slate-600 cursor-pointer select-none" title="Yeni satırda önceki satırın marka, platform, görev türü ve kişisi kullanılır (başlık hariç).">
             <input type="checkbox" checked={carry} onChange={(e) => setCarry(e.target.checked)} className="h-4 w-4 accent-orange-600" />Önceki satırdan taşı
           </label>
           <span className="inline-flex items-center gap-0.5">
@@ -3643,7 +3671,7 @@ function BulkTaskSheet({ draftScope, createTasks, onClose }) {
             {summary.saved > 0 && <span className="ml-1.5 text-emerald-700">{summary.saved} görev kaydedildi.</span>}
           </p>
         )}
-        {summary.saved > 0 && <Btn size="sm" variant="ghost" onClick={() => send({ type: "set", rows: (rs) => { const out = rs.filter((r) => !r.saved); return out.length ? out : [bulkNewRow()]; } })}>Kaydedilenleri Listeden Kaldır</Btn>}
+        {summary.saved > 0 && <Btn size="sm" variant="ghost" onClick={() => send({ type: "set", rows: (rs) => { const out = rs.filter((r) => !r.saved); return out.length ? out : [newRow()]; } })}>Kaydedilenleri Listeden Kaldır</Btn>}
         <Btn variant="primary" onClick={save} disabled={saving || !!draft} aria-busy={saving} data-bulk-save="">
           {saving ? <><RefreshCw size={14} className="animate-spin" />Kaydediliyor…</> : <><Check size={15} />{saveError ? "Tekrar Dene" : "Tümünü Kaydet"}{summary.ready ? ` (${summary.ready})` : ""}</>}
         </Btn>
@@ -4134,14 +4162,10 @@ function EmployeeDashboard({ search, brandId, onAllNotifications }) {
   );
 }
 
-/* ───────────────────────── Admin: Operasyon masası (4 sayaç + 8 grup) ───────────────────────── */
+/* ───────────────────────── Admin: Genel Bakış (4 kategori kutusu) ───────────────────────── */
 
 const isAgencyBrand = (brand) => !!brand && (/ajans/i.test(brand.sector || ""));
 const OPS_META = {
-  urgent: [AlertTriangle, "text-red-600", "border-t-red-500", "Geciken veya acil iş yok."],
-  manager: [ShieldCheck, "text-violet-600", "border-t-violet-500", "Yönetici onayında iş yok."],
-  client: [Briefcase, "text-amber-600", "border-t-amber-500", "Müşteri yanıtı beklenen iş yok."],
-  active: [Activity, "text-sky-600", "border-t-sky-500", "Aktif çalışma yok."],
   done: [CheckCircle2, "text-emerald-600", "border-t-emerald-500", "Son 7 günde tamamlanan iş yok."],
   web: [Globe, "text-indigo-600", "border-t-indigo-500", "Web veya teknik iş yok."],
   agency: [Sparkles, "text-orange-600", "border-t-orange-500", "Ajans içi iş yok."],
@@ -4168,18 +4192,27 @@ function OpsBoxItem({ task, showStatus }) {
   );
 }
 
-/* Grubun adı durumu zaten söylüyorsa (onaylar, tamamlananlar, geciken) satırda ayrıca durum etiketi gösterilmez. */
-const STATUS_IMPLIED = new Set(["urgent", "manager", "client", "done"]);
+/* Kutunun adı durumu zaten söylüyorsa (tamamlananlar) satırda ayrıca durum etiketi gösterilmez. */
+const STATUS_IMPLIED = new Set(["done"]);
 
+/* Kategori kutusu. Web & Teknik / Ajans İçi İşler / Reklam İşleri kutusundan açılan yeni görevde tür önceden seçilidir. */
 function OpsBox({ box, tasks }) {
+  const { openNewTask, can: allowed } = useWS();
   const [Icon, tone, border, empty] = OPS_META[box.key];
   const id = `ops-${box.key}`;
+  const presetType = TYPE_FOR_CATEGORY[box.key];
   return (
     <section data-ops-box={box.key} aria-labelledby={id} className={`flex flex-col h-[300px] bg-white border border-slate-200 border-t-4 ${border} rounded-xl overflow-hidden min-w-0`}>
       <header className="shrink-0 flex items-center gap-2 px-3.5 h-11 border-b border-slate-100">
         <Icon size={15} className={tone} aria-hidden="true" />
         <h3 id={id} className="flex-1 min-w-0 cw-13 font-bold text-slate-900 truncate" title={box.title}>{box.title}</h3>
         <span className={`h-5 min-w-5 px-1.5 rounded-full cw-11 font-bold tabular-nums flex items-center justify-center ${tasks.length ? "bg-slate-100 text-slate-700" : "bg-slate-50 text-slate-300"}`} data-ops-count={tasks.length}>{tasks.length}</span>
+        {presetType && allowed("canCreateTasks") && (
+          <button type="button" onClick={() => openNewTask(undefined, { type: presetType })} aria-label={`${box.title}: yeni görev`} title="Yeni görev" data-ops-new={box.key}
+            className="shrink-0 -mr-1 h-7 w-7 inline-flex items-center justify-center rounded-md text-slate-400 hover:text-orange-700 hover:bg-orange-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300 transition-colors">
+            <Plus size={15} />
+          </button>
+        )}
       </header>
       <div className="flex-1 min-h-0 overflow-y-auto cw-scroll p-1.5" tabIndex={0} role="region" aria-label={`${box.title} listesi`}>
         {tasks.length
@@ -4193,30 +4226,21 @@ function OpsBox({ box, tasks }) {
 function OpsDesk({ tasks, open, onToggle }) {
   const { brandsById } = useWS();
   const now = useNow();
-  const { metrics, groups } = useMemo(() => {
-    const at = new Date(now);
-    const yesterday = addDays(TODAY, -1), weekAgo = addDays(TODAY, -7);
+  const groups = useMemo(() => {
+    const weekAgo = addDays(TODAY, -7);
     const out = Object.fromEntries(OPS_BOXES.map((b) => [b.key, []]));
     const isAgency = (t) => isAgencyBrand(brandsById[t.brandId]);
     tasks.forEach((t) => {
-      const key = opsBox(t, { now: at, isAgency });
+      const key = opsBox(t, { isAgency });
+      if (!key) return; // sosyal medya içeriği: Günlük Operasyon Akışı ve İçerik Planlayıcıda
       // Tamamlananlar: yayına hazır (Onaylandı) her zaman; tamamlananlar yalnızca son 7 gün.
       if (key === "done" && t.status === "Tamamlandı" && !((planDate(t) || "") >= weekAgo || String(t.updatedAt || "").slice(0, 10) >= weekAgo)) return;
       out[key].push(t);
     });
     const byDue = (a, b) => `${a.dueDate || "9999"} ${a.dueTime || "99"}`.localeCompare(`${b.dueDate || "9999"} ${b.dueTime || "99"}`);
     Object.entries(out).forEach(([k, list]) => list.sort(k === "done" ? (a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")) : byDue));
-    return { metrics: opsMetrics(tasks, { now: at, today: TODAY, yesterday }), groups: out };
-  }, [tasks, brandsById, now]);
-  const diff = metrics.today - metrics.yesterday;
-  const cards = [
-    { key: "today", label: "Bugünkü Teslimatlar", value: metrics.today, tone: "text-orange-600", border: "border-t-orange-500",
-      sub: diff === 0 ? "Dünle aynı" : `Dünden ${Math.abs(diff)} ${diff > 0 ? "fazla" : "az"}`, SubIcon: diff >= 0 ? ArrowUp : ArrowDown },
-    { key: "late", label: "Geciken İşler", value: metrics.late, tone: metrics.late ? "text-red-600" : "text-slate-900", border: "border-t-red-500",
-      sub: metrics.critical ? `${metrics.critical} kritik iş` : metrics.late ? "Kritik iş yok" : "Geciken iş yok", SubIcon: AlertTriangle, subTone: metrics.critical ? "text-red-600 font-semibold" : "" },
-    { key: "manager", label: "Yönetici Onayı", value: metrics.manager, tone: "text-slate-900", border: "border-t-violet-500", sub: "İncelenmeyi bekliyor", SubIcon: ShieldCheck },
-    { key: "client", label: "Müşteri Onayı", value: metrics.client, tone: "text-slate-900", border: "border-t-amber-500", sub: "Yanıt bekliyor", SubIcon: Briefcase },
-  ];
+    return out;
+  }, [tasks, brandsById, now]); // now: gün değişince "son 7 gün" yeniden hesaplanır
   return (
     <section aria-label="Genel bakış" data-ops-desk="">
       <div className="flex items-center justify-between mb-2.5">
@@ -4226,24 +4250,27 @@ function OpsDesk({ tasks, open, onToggle }) {
         </button>
       </div>
       {open && (
-        <div className="space-y-4">
-          <div className="grid gap-3 grid-cols-2 xl:grid-cols-4">
-            {cards.map(({ key, label, value, tone, border, sub, SubIcon, subTone }) => (
-              <div key={key} data-ops-metric={key} className={`p-4 rounded-xl border border-slate-200 border-t-4 ${border} bg-white min-w-0`}>
-                <p className="cw-11 font-semibold uppercase tracking-wide text-slate-500 truncate">{label}</p>
-                <p className={`mt-1 text-3xl font-bold tracking-tight tabular-nums ${tone}`} data-ops-value={value}>{value}</p>
-                <p className={`mt-1 flex items-center gap-1 cw-12 text-slate-500 min-w-0 ${subTone || ""}`}><SubIcon size={12} className="shrink-0" aria-hidden="true" /><span className="truncate">{sub}</span></p>
-              </div>
-            ))}
-          </div>
-          <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4" data-ops-boxes="">
-            {OPS_BOXES.map((b) => <OpsBox key={b.key} box={b} tasks={groups[b.key]} />)}
-          </div>
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4" data-ops-boxes="">
+          {OPS_BOXES.map((b) => <OpsBox key={b.key} box={b} tasks={groups[b.key]} />)}
         </div>
       )}
     </section>
   );
 }
+
+/* Birleşik Dashboard'un (/dashboard) bölümü: Genel Bakış'ın altında Günlük Operasyon Akışı ve İçerik Planlayıcı. */
+function DashboardSection({ id, title, Icon, count, sectionRef, children }) {
+  return (
+    <section ref={sectionRef} aria-labelledby={id} data-dashboard-section={id} className="space-y-2.5 scroll-mt-3">
+      <h2 id={id} className="flex items-center gap-2 cw-13 font-semibold text-slate-900">
+        <Icon size={15} className="text-slate-400" aria-hidden="true" />{title}
+        <span className="h-5 min-w-5 px-1.5 rounded-full bg-slate-100 text-slate-600 cw-11 font-bold tabular-nums inline-flex items-center justify-center" data-section-count={count}>{count}</span>
+      </h2>
+      {children}
+    </section>
+  );
+}
+
 
 /* ───────────────────────── Sosyal Medya Planı (Günlük / Haftalık / Aylık) ───────────────────────── */
 
@@ -4332,7 +4359,7 @@ function AssigneeHover({ userId }) {
   );
 }
 
-/* Aylık plan satırı: tarih · gün · format/başlık · ekler · yorumlar · sorumlu · durum. */
+/* Aylık plan satırı: tarih · gün · görev türü/başlık · ekler · yorumlar · sorumlu · durum. */
 function PlanRow({ task }) {
   const { openTask, attachmentsByTask, updateTask, statusOptions } = useWS();
   const iso = planDate(task);
@@ -4403,7 +4430,7 @@ function MonthPlan({ brands, tasks, month, brandId, onSelectBrand }) {
             </select>
           </label>
           <h2 className="text-lg font-bold tracking-tight text-slate-900 min-w-0" data-plan-heading="">{active.name.toLocaleUpperCase("tr-TR")} {AYLAR[parseISO(month).getMonth()]} Sosyal Medya</h2>
-          {allowed("canCreateTasks") && <Btn size="sm" variant="secondary" onClick={() => openNewTask(active.id)}><Plus size={14} />İçerik Ekle</Btn>}
+          {allowed("canCreateTasks") && <Btn size="sm" variant="secondary" onClick={() => openNewTask(active.id, { context: TASK_CONTEXTS.social })}><Plus size={14} />İçerik Ekle</Btn>}
         </div>
         {weeks.length === 0 ? (
           <p className="py-10 text-center cw-13 text-slate-500" data-plan-empty="">{monthLabel(month)} için {active.name} planında içerik yok.</p>
@@ -4499,7 +4526,9 @@ function SocialPlanPage({ search, brandId }) {
   const [planBrand, setPlanBrand] = useState(brandId !== "all" ? brandId : null);
   useEffect(() => { if (brandId !== "all") setPlanBrand(brandId); }, [brandId]);
   const q = norm(search);
-  const tasks = useMemo(() => state.tasks.filter((t) => planDate(t) && matchesSearch(q, t.title, brandsById[t.brandId]?.name, t.platform, t.format)), [state.tasks, q, brandsById]);
+  const [typeFilter, setTypeFilter] = useState("all"); // "all" | sosyal medya türü | "other"
+  const tasks = useMemo(() => state.tasks.filter((t) => planDate(t) && matchesSearch(q, t.title, brandsById[t.brandId]?.name, t.platform, t.format)
+    && (typeFilter === "all" || (typeFilter === "other" ? !SOCIAL_MEDIA_TASK_TYPES.includes(t.format) : t.format === typeFilter))), [state.tasks, q, brandsById, typeFilter]);
   const brands = state.brands;
   const visibleBrands = view === "month" || brandId === "all" ? brands : brands.filter((b) => b.id === brandId);
   const step = (n) => setCursor((c) => (view === "day" ? addDays(c, n) : view === "week" ? addDays(c, 7 * n) : shiftMonth(c, n)));
@@ -4519,7 +4548,13 @@ function SocialPlanPage({ search, brandId }) {
             <p className="cw-11 text-slate-500 leading-tight">{sub}</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} aria-label={`${TASK_TYPE_LABEL} süzgeci`} title={TASK_TYPE_LABEL} data-plan-type-filter=""
+            className={`h-8 rounded-lg border px-2.5 pr-7 cw-12 font-medium outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100 ${typeFilter !== "all" ? "border-orange-300 bg-orange-50 text-orange-800" : "border-slate-200 bg-white text-slate-700"}`}>
+            <option value="all">Tüm Görev Türleri</option>
+            {SOCIAL_MEDIA_TASK_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            <option value="other">Diğer Görevler</option>
+          </select>
           <div className="inline-flex p-1 gap-0.5 rounded-lg bg-slate-100" role="tablist" aria-label="Plan görünümü">
             {PLAN_VIEWS.map(([key, label, Icon]) => (
               <button key={key} type="button" role="tab" aria-selected={view === key} onClick={() => setView(key)} data-plan-view={key}
@@ -4528,7 +4563,7 @@ function SocialPlanPage({ search, brandId }) {
               </button>
             ))}
           </div>
-          {allowed("canCreateTasks") && <Btn size="sm" variant="primary" onClick={() => openNewTask(brandId !== "all" ? brandId : undefined)}><Plus size={14} /><span className="hidden sm:inline">Yeni Görev</span></Btn>}
+          {allowed("canCreateTasks") && <Btn size="sm" variant="primary" onClick={() => openNewTask(brandId !== "all" ? brandId : undefined, { context: TASK_CONTEXTS.social })}><Plus size={14} /><span className="hidden sm:inline">Yeni Görev</span></Btn>}
         </div>
       </div>
       {view === "month" && <MonthPlan brands={brands} tasks={tasks} month={monthStart(cursor)} brandId={planBrand} onSelectBrand={setPlanBrand} />}
@@ -7248,7 +7283,7 @@ function ChecklistTemplateEditor({ brandId, template, onDone, onSaved }) {
       </div>
       <Field label="Görev Türleri" group error={errors.taskTypes}>
         <div className="flex flex-wrap gap-1.5">
-          {TASK_TYPES.map((t) => {
+          {TASK_TYPES.filter((t) => !LEGACY_TASK_TYPES.includes(t) || v.taskTypes.includes(t)).map((t) => {
             const on = v.taskTypes.includes(t);
             return <button key={t} type="button" aria-pressed={on} onClick={() => toggleType(t)} className={`h-8 px-2.5 rounded-lg border cw-12 font-medium transition-colors ${on ? "border-orange-300 bg-orange-50 text-orange-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>{t}</button>;
           })}
@@ -7297,12 +7332,11 @@ function ChecklistTemplateEditor({ brandId, template, onDone, onSaved }) {
 /* ───────────────────────── Uygulama ───────────────────────── */
 
 /* Rol bazlı menü. `perm` belirtilen öğe yalnızca o yetkiye sahip kullanıcılara görünür.
-   "ops" sayfaları mevcut çalışma alanını (genel bakış + akış/tablo/dosyalar) kullanır. */
+   "ops" sayfaları mevcut çalışma alanını kullanır: yöneticide tek sayfalık Dashboard (Genel Bakış + Günlük Operasyon Akışı +
+   İçerik Planlayıcı) ya da kılavuz / dosyalar; çalışanda genel bakış + akış/tablo/dosyalar sekmeleri. */
 const NAV_BY_ROLE = {
   admin: [
-    { key: "overview", label: "Genel Bakış", Icon: LayoutDashboard },
-    { key: "today", label: "Günlük Operasyon Akışı", Icon: Calendar },
-    { key: "plan", label: "İçerik Planlayıcı", Icon: Table },
+    { key: "overview", label: "Genel Bakış", Icon: LayoutDashboard }, // Genel Bakış + Günlük Operasyon Akışı + İçerik Planlayıcı
     { key: "social", label: "Sosyal Medya Planı", Icon: CalendarDays },
     { key: "kit", label: "Marka Kılavuzu", Icon: BookOpen },
     { key: "files", label: "Marka Dosyaları & Varlıklar", Icon: FolderOpen, perm: "canViewBrandFiles" },
@@ -7361,7 +7395,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
   const [drawer, setDrawer] = useState(null);
   const [contentId, setContentId] = useState(null);
   const [newTask, setNewTask] = useState(null);
-  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false); // false | "general" | "social" (görev türü bağlamı)
   const [deleteId, setDeleteId] = useState(null);
   const [preview, setPreview] = useState(null);
   const [assetModal, setAssetModal] = useState(null);
@@ -7426,6 +7460,11 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
     () => sortTasks(scopedTasks.filter((t) => matchTask(t, filters, brandsById)), sort, { brandsById, commentCount, attachmentsByTask }),
     [scopedTasks, filters, brandsById, sort, commentCount, attachmentsByTask],
   );
+  // Dashboard'daki Günlük Operasyon Akışı her zaman bugünü gösterir (diğer süzgeçler ve seçili marka geçerli).
+  // Geliştirmede window.__CW_ALL_BRANDS__: eski tarayıcı testleri kart ızgarasını tüm görevlerle ölçer.
+  const dailyTasks = useMemo(() => (import.meta.env?.DEV && window.__CW_ALL_BRANDS__ ? filteredTasks
+    : sortTasks(scopedTasks.filter((t) => matchTask(t, { ...filters, dateScope: "today" }, brandsById)), sort, { brandsById, commentCount, attachmentsByTask })),
+  [filteredTasks, scopedTasks, filters, brandsById, sort, commentCount, attachmentsByTask]);
   const activeCount = [filters.search.trim(), filters.dateScope !== "all", filters.status !== "all", filters.assignee !== "all", filters.platform !== "all"].filter(Boolean).length;
   const visibleBrands = selectedBrandId === "all" ? view.brands : view.brands.filter((b) => b.id === selectedBrandId);
   const scopedAssets = selectedBrandId === "all" ? view.assets.length : view.assets.filter((a) => a.brandId === selectedBrandId).length;
@@ -7496,7 +7535,8 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
     openContent: (id) => setContentId(id),
     askDelete: (id) => setDeleteId(id),
     openPreview: (kind, id) => setPreview({ kind, id }),
-    openNewTask: (brandId) => setNewTask({ brandId: brandId || (selectedBrandId !== "all" ? selectedBrandId : undefined) }),
+    // opts.context: "social" (Sosyal Medya Planı) | "general"; opts.type: modülün ön seçili görev türü.
+    openNewTask: (brandId, opts = {}) => setNewTask({ brandId: brandId || (selectedBrandId !== "all" ? selectedBrandId : undefined), context: opts.context || TASK_CONTEXTS.general, type: opts.type }),
     brandKitStore: brandKit,
     checklistApi: checklistsOn ? checklistApi : null, checklistIndex, ensureChecklist, submitTask,
     contentApi: state.features?.approvals ? contentApi : null,
@@ -7549,6 +7589,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
     if (!OPS_KEYS.has(key)) { setPage(key); scrollTop(); return; }
     setPage("ops");
     if (key === "overview") { setTab("feed"); setFilter("dateScope", "all"); setOverviewOpen(true); scrollTop(); }
+    // Eski ayrı görünümler (çalışanın "Görevlerim"i ve eski bağlantılar) yöneticide birleşik Dashboard'un ilgili bölümüne gider.
     if (key === "today") { setTab("feed"); setFilter("dateScope", "today"); scrollToWorkspace(); }
     // "Günlük Operasyon Akışı"nın koyduğu Bugün süzgeci planlayıcıda takılı kalmaz (menüdeki sayı ile liste aynı olur).
     if (key === "plan") { setTab("table"); if (filters.dateScope === "today") setFilter("dateScope", "all"); scrollToWorkspace(); }
@@ -7562,10 +7603,20 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
   };
   const opsNav = role === "employee"
     ? (tab === "files" || tab === "kit" ? tab : "plan")
-    : flash ? "filters" : tab === "table" ? "plan" : tab === "files" || tab === "kit" ? tab : filters.dateScope === "today" ? "today" : "overview";
+    : flash ? "filters" : tab === "files" || tab === "kit" ? tab : "overview";
   const activeNav = currentPage === "ops" ? opsNav : currentPage;
 
   const selectBrand = (id) => { setSelectedBrandId(id); setFolderId(null); setSidebarOpen(false); };
+  /* "AgencyOS" logosu: geçici marka bağlamı (seçili marka, marka filtresi, marka onay bağlantısı, klasör) ve görev
+     filtreleri temizlenir; rolün ana görünümü tüm markalarla açılır. Ekip için adres /dashboard olur (müşterinin adresi
+     /onay bağlantısıdır, değişmez). Tüm bölümler aynı durumdan beslendiği için hepsi "Tüm Markalar"a döner. */
+  const goHome = () => {
+    setSelectedBrandId("all"); setFolderId(null); setFilters(emptyFilters()); setPortal(null);
+    setBulkOpen(false); setFiltersOpen(false); setSidebarOpen(false); setOverviewOpen(true);
+    setTab(role === "employee" ? "table" : "feed"); setPageRaw(DEFAULT_PAGE[role]);
+    if (role !== "client" && window.location.pathname !== ROUTES.dashboard) navigate(ROUTES.dashboard); // navigate geliştirme demosu sorgusunu (?demo) korur
+    scrollTop();
+  };
   const focusBrand = (id, nextTab) => { selectBrand(id); setPage("ops"); setTab(nextTab); scrollToWorkspace(); };
 
   // Bildirime tıklayınca okundu işaretlenir ve ilgili içerik/görev açılır.
@@ -7595,28 +7646,36 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
     "client-files": scopedAssets,
   };
 
-  // Genel Bakış yalnızca grafikleri gösterir; tüm markaların görev kartları ana sayfayı yavaşlatmasın diye
-  // marka seçilince (marka sayfası) ya da arama/filtre/Bugün kapsamı varken listelenir.
-  // (Eski tarayıcı testleri tüm kart ızgarasını ölçer: yalnızca geliştirmede window.__CW_ALL_BRANDS__ ile eski görünüm.)
-  const dashboardOnly = tab === "feed" && selectedBrandId === "all" && activeCount === 0 && !(import.meta.env?.DEV && window.__CW_ALL_BRANDS__);
   let pageNode;
-  if (currentPage === "ops") {
+  if (currentPage === "ops" && role === "admin" && tab !== "kit" && tab !== "files") {
+    // Yönetici Dashboard'u (/dashboard): üç bölüm aynı görev kaynağından (scopedTasks / filteredTasks) beslenir.
     pageNode = (
       <>
-        {role === "admin"
-          ? <OpsDesk tasks={scopedTasks} open={overviewOpen} onToggle={() => setOverviewOpen((o) => !o)} />
-          : <Overview tasks={scopedTasks} open={overviewOpen} onToggle={() => setOverviewOpen((o) => !o)} filters={filters} onApply={(k, v) => { setFilter(k, v); if (tab === "files") setTab("feed"); }} />}
-        {dashboardOnly ? (
-          <p ref={workspaceRef} data-dashboard-hint="" className="flex items-center gap-2 rounded-xl border border-dashed border-slate-200 bg-white px-4 py-3 cw-12 text-slate-500">
-            <LayoutGrid size={14} className="shrink-0 text-slate-400" />Markaların görevlerini görmek için menüdeki marka listesinden bir marka seçin.
-          </p>
-        ) : <section ref={workspaceRef} className="space-y-4" aria-label="Çalışma alanı">
+        <OpsDesk tasks={scopedTasks} open={overviewOpen} onToggle={() => setOverviewOpen((o) => !o)} />
+        <DashboardSection id="cw-daily" title="Günlük Operasyon Akışı" Icon={Calendar} count={dailyTasks.length}>
+          <DailyFeed brands={visibleBrands} tasks={dailyTasks} hasActiveFilters onClear={clearFilters} onFocusBrand={focusBrand}
+            emptyTitle="Bugün teslimi olan görev yok" emptyText="Bugüne ait görevler burada marka marka listelenir. Tüm görevler aşağıdaki İçerik Planlayıcıdadır." />
+        </DashboardSection>
+        <DashboardSection id="cw-planner" title="İçerik Planlayıcı" Icon={Table} count={filteredTasks.length} sectionRef={workspaceRef}>
+          <ContentTable tasks={filteredTasks} sort={sort} setSort={setSort} defaultBrandId={selectedBrandId !== "all" ? selectedBrandId : view.brands[0]?.id} dueDefault={defaultDate} isVisible={isVisible} />
+        </DashboardSection>
+      </>
+    );
+  } else if (currentPage === "ops" && role === "admin") {
+    pageNode = tab === "kit"
+      ? (selectedBrand ? <BrandKitView key={selectedBrand.id} brandId={selectedBrand.id} /> : <BrandKitPicker brands={view.brands} onPick={selectBrand} />)
+      : <BrandFiles selectedBrandId={selectedBrandId} onSelectBrand={selectBrand} folderId={folderId} setFolderId={setFolderId} onAddAsset={perms.has("canManageAssets") ? (fid) => setAssetModal({ folderId: fid }) : null} />;
+  } else if (currentPage === "ops") {
+    pageNode = (
+      <>
+        <Overview tasks={scopedTasks} open={overviewOpen} onToggle={() => setOverviewOpen((o) => !o)} filters={filters} onApply={(k, v) => { setFilter(k, v); if (tab === "files") setTab("feed"); }} />
+        <section ref={workspaceRef} className="space-y-4" aria-label="Çalışma alanı">
           <WorkspaceTabs tabs={tabs} tab={tab} setTab={setTab} sort={sort} setSort={setSort} counts={{ feed: filteredTasks.length, table: filteredTasks.length, files: scopedAssets }} />
           {tab === "feed" && <DailyFeed brands={visibleBrands} tasks={filteredTasks} hasActiveFilters={activeCount > 0} onClear={clearFilters} onFocusBrand={focusBrand} />}
           {tab === "table" && <ContentTable tasks={filteredTasks} sort={sort} setSort={setSort} defaultBrandId={selectedBrandId !== "all" ? selectedBrandId : view.brands[0]?.id} dueDefault={defaultDate} isVisible={isVisible} />}
           {tab === "kit" && (selectedBrand ? <BrandKitView key={selectedBrand.id} brandId={selectedBrand.id} /> : <BrandKitPicker brands={view.brands} onPick={selectBrand} />)}
           {tab === "files" && <BrandFiles selectedBrandId={selectedBrandId} onSelectBrand={selectBrand} folderId={folderId} setFolderId={setFolderId} onAddAsset={perms.has("canManageAssets") ? (fid) => setAssetModal({ folderId: fid }) : null} />}
-        </section>}
+        </section>
       </>
     );
   } else if (currentPage === "my") pageNode = <EmployeeDashboard search={filters.search} brandId={selectedBrandId} onAllNotifications={() => setPage("notifications")} />;
@@ -7626,7 +7685,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
     pageNode = (
       <TeamPage search={filters.search} onNewBrand={() => setBrandModal(true)}
         onViewBrand={(id) => { selectBrand(id); setPage("ops"); setTab("feed"); setFilters(emptyFilters()); scrollTop(); }}
-        onViewTasks={(userId) => { setFilters({ ...emptyFilters(), assignee: userId }); setSelectedBrandId("all"); setPage("ops"); setTab("table"); scrollTop(); }}
+        onViewTasks={(userId) => { setFilters({ ...emptyFilters(), assignee: userId }); setSelectedBrandId("all"); setPage("ops"); setTab("table"); scrollToWorkspace(); }}
         onViewKit={(id) => { selectBrand(id); setPage("ops"); setTab("kit"); scrollTop(); }}
         onViewPortal={(userId) => onViewAs(userId)} />
     );
@@ -7655,6 +7714,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
           counts={navCounts}
           selectedBrandId={selectedBrandId}
           onSelectBrand={selectBrand}
+          onHome={goHome}
           onNewBrand={perms.has("canCreateBrand") ? () => setBrandModal(true) : null}
           onMyTasks={role === "client" ? null : () => { setFilters({ ...emptyFilters(), assignee: actor.id }); setPage("ops"); setTab(role === "employee" ? "table" : "feed"); notify("Size atanan görevler listelendi.", "info"); }}
           onResetFilters={() => { clearFilters(); setSelectedBrandId("all"); notify("Tüm filtreler sıfırlandı.", "info"); }}
@@ -7672,7 +7732,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
             setFilter={setFilter}
             onMenu={() => setSidebarOpen(true)}
             onNewTask={perms.has("canCreateTasks") && ["ops", "approvals"].includes(currentPage) && !bulkOpen ? () => ctx.openNewTask() : null}
-            onBulk={perms.has("canCreateTasks") && currentPage === "ops" && !bulkOpen ? () => setBulkOpen(true) : null}
+            onBulk={perms.has("canCreateTasks") && (currentPage === "ops" || currentPage === "social") && !bulkOpen ? () => setBulkOpen(currentPage === "social" ? TASK_CONTEXTS.social : TASK_CONTEXTS.general) : null}
             showFilters={currentPage === "ops" && !bulkOpen}
             showAssigneeFilter={perms.has("canAssignTasks")}
             searchPlaceholder={SEARCH_PLACEHOLDERS[currentPage]}
@@ -7689,7 +7749,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
 
           <main ref={mainRef} className={`flex-1 min-h-0 ${bulkOpen ? "overflow-hidden" : "overflow-y-auto"} cw-scroll`}>
             {bulkOpen
-              ? <BulkTaskSheet draftScope={draftScope} createTasks={createTasks} onClose={() => setBulkOpen(false)} />
+              ? <BulkTaskSheet draftScope={draftScope} createTasks={createTasks} context={bulkOpen} onClose={() => setBulkOpen(false)} />
               : (
                 <div className="px-4 lg:px-6 py-5 space-y-5 max-w-screen-2xl mx-auto">
                   {portal?.status === "denied" && (
@@ -7717,6 +7777,8 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
         {newTask && (
           <NewTaskModal
             presetBrandId={newTask.brandId}
+            context={newTask.context}
+            presetType={newTask.type}
             defaultDate={defaultDate}
             onClose={() => setNewTask(null)}
             onCreated={(task) => {
@@ -8054,7 +8116,9 @@ function SetPasswordScreen({ api, email, onDone, onSignOut }) {
 function clearUserCaches(userId, draftScope) {
   contentUrlCache.clear(); checkNoteDrafts.clear(); kitDrafts.clear(); dirtyKitForms.clear(); loadedKitFonts.clear();
   syncKitUnloadGuard();
-  try { if (userId) window.localStorage.removeItem(draftKey(draftScope || "yerel", userId)); } catch { /* depolama kapalı */ }
+  try {
+    if (userId) Object.values(TASK_CONTEXTS).forEach((c) => window.localStorage.removeItem(bulkDraftKey(draftScope, userId, c)));
+  } catch { /* depolama kapalı */ }
 }
 
 /* "Şifremi Değiştir": şifreyle girilmiş oturumda mevcut şifre sorulur; e-posta bağlantısıyla girilmişse sorulmaz. */

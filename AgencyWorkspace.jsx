@@ -7595,6 +7595,10 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
     "client-files": scopedAssets,
   };
 
+  // Genel Bakış yalnızca grafikleri gösterir; tüm markaların görev kartları ana sayfayı yavaşlatmasın diye
+  // marka seçilince (marka sayfası) ya da arama/filtre/Bugün kapsamı varken listelenir.
+  // (Eski tarayıcı testleri tüm kart ızgarasını ölçer: yalnızca geliştirmede window.__CW_ALL_BRANDS__ ile eski görünüm.)
+  const dashboardOnly = tab === "feed" && selectedBrandId === "all" && activeCount === 0 && !(import.meta.env?.DEV && window.__CW_ALL_BRANDS__);
   let pageNode;
   if (currentPage === "ops") {
     pageNode = (
@@ -7602,13 +7606,17 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
         {role === "admin"
           ? <OpsDesk tasks={scopedTasks} open={overviewOpen} onToggle={() => setOverviewOpen((o) => !o)} />
           : <Overview tasks={scopedTasks} open={overviewOpen} onToggle={() => setOverviewOpen((o) => !o)} filters={filters} onApply={(k, v) => { setFilter(k, v); if (tab === "files") setTab("feed"); }} />}
-        <section ref={workspaceRef} className="space-y-4" aria-label="Çalışma alanı">
+        {dashboardOnly ? (
+          <p ref={workspaceRef} data-dashboard-hint="" className="flex items-center gap-2 rounded-xl border border-dashed border-slate-200 bg-white px-4 py-3 cw-12 text-slate-500">
+            <LayoutGrid size={14} className="shrink-0 text-slate-400" />Markaların görevlerini görmek için menüdeki marka listesinden bir marka seçin.
+          </p>
+        ) : <section ref={workspaceRef} className="space-y-4" aria-label="Çalışma alanı">
           <WorkspaceTabs tabs={tabs} tab={tab} setTab={setTab} sort={sort} setSort={setSort} counts={{ feed: filteredTasks.length, table: filteredTasks.length, files: scopedAssets }} />
           {tab === "feed" && <DailyFeed brands={visibleBrands} tasks={filteredTasks} hasActiveFilters={activeCount > 0} onClear={clearFilters} onFocusBrand={focusBrand} />}
           {tab === "table" && <ContentTable tasks={filteredTasks} sort={sort} setSort={setSort} defaultBrandId={selectedBrandId !== "all" ? selectedBrandId : view.brands[0]?.id} dueDefault={defaultDate} isVisible={isVisible} />}
           {tab === "kit" && (selectedBrand ? <BrandKitView key={selectedBrand.id} brandId={selectedBrand.id} /> : <BrandKitPicker brands={view.brands} onPick={selectBrand} />)}
           {tab === "files" && <BrandFiles selectedBrandId={selectedBrandId} onSelectBrand={selectBrand} folderId={folderId} setFolderId={setFolderId} onAddAsset={perms.has("canManageAssets") ? (fid) => setAssetModal({ folderId: fid }) : null} />}
-        </section>
+        </section>}
       </>
     );
   } else if (currentPage === "my") pageNode = <EmployeeDashboard search={filters.search} brandId={selectedBrandId} onAllNotifications={() => setPage("notifications")} />;

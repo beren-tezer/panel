@@ -15,7 +15,7 @@ try {
   /* ── 1. Operasyon masası ── */
   await viewport(1440, 900);
   await send("Page.navigate", { url: h.url });
-  await waitFor(() => page(`return $$("[data-ops-box]").length === 8;`));
+  await waitFor(() => page(`return $$("[data-ops-box]").length === 8;`), 45000); // ilk derleme (büyük JSX) yavaş makinede 15 sn'yi aşabilir
   const desk = await page(`return {
     metrics: $$("[data-ops-metric]").map((m) => [m.dataset.opsMetric, m.querySelector("p").textContent, +m.querySelector("[data-ops-value]").dataset.opsValue]),
     boxes: $$("[data-ops-box]").map((b) => { const r = b.getBoundingClientRect(); return { key: b.dataset.opsBox, title: b.querySelector("h3").textContent, n: +b.querySelector("[data-ops-count]").dataset.opsCount, items: $$("[data-ops-task]", b).map((x) => x.dataset.opsTask), x: Math.round(r.x), y: Math.round(r.y) }; }),

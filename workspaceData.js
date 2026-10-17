@@ -204,7 +204,7 @@ const TASK_COLUMNS = {
   status: "status", priority: "priority", publishDate: "publish_date", dueDate: "due_date", dueTime: "due_time",
   description: "description", createdAt: "created_at", updatedAt: "updated_at", checklistDisabled: "checklist_disabled",
 };
-const NULLABLE = new Set(["assignee_id", "publish_date", "due_date", "due_time"]);
+const NULLABLE = new Set(["assignee_id", "publish_date", "due_date", "due_time", "platform"]); // platform: 011 sonrası boş olabilir
 const ASSET_COLUMNS = {
   brandId: "brand_id", folderId: "folder_id", name: "name", type: "type", thumbnail: "thumbnail_url",
   driveFileId: "drive_file_id", driveUrl: "drive_url", size: "size_label", owner: "owner_id",
@@ -222,7 +222,7 @@ function toColumns(obj, map) {
 }
 
 const rowToTask = (r) => ({
-  id: r.id, code: taskCode(r.task_no), brandId: r.brand_id, title: r.title, platform: r.platform, format: r.format,
+  id: r.id, code: taskCode(r.task_no), brandId: r.brand_id, title: r.title, platform: r.platform || "", format: r.format,
   assigneeId: r.assignee_id || "", status: r.status, priority: r.priority, publishDate: r.publish_date || "", dueDate: r.due_date || "",
   dueTime: r.due_time ? String(r.due_time).slice(0, 5) : "",
   description: r.description || "", createdAt: r.created_at, updatedAt: r.updated_at, checklistDisabled: r.checklist_disabled === true,

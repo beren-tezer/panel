@@ -128,7 +128,8 @@ export const EMPLOYEE_BOXES = [
   { key: "other", title: "Diğer Görevler" },
   { key: "ads", title: "Reklam Görevleri" },
 ];
-const SOCIAL_FORMATS = new Set(["Reels", "Gönderi", "Hikâye", "Karusel", "Video"]);
+const SOCIAL_FORMATS = new Set(["Reels", "Gönderi", "Hikâye", "Karusel", "Video", "Sosyal Medya"]);
+const AD_FORMATS = new Set(["Reklam", "Reklam İşleri"]);
 const AD_PLATFORMS = new Set(["Meta Reklam", "Google Reklam"]);
 
 /* Öncelik: teslim edilmiş → onay aşamaları → gecikme → iş türü (web / reklam / sosyal medya içeriği / diğer). */
@@ -138,7 +139,7 @@ export function employeeBox(task, now = new Date(), timeZone = TIMEZONE) {
   if (task.status === "Müşteri Onayı") return "client";
   if (task.status === "Gecikti" || deadlineInfo(task, now, timeZone).state === "overdue") return "late";
   if (task.format === "Web" || task.platform === "Web Sitesi") return "web";
-  if (task.format === "Reklam" || AD_PLATFORMS.has(task.platform)) return "ads";
+  if (AD_FORMATS.has(task.format) || AD_PLATFORMS.has(task.platform)) return "ads";
   if (SOCIAL_FORMATS.has(task.format)) return "active";
   return "other";
 }
@@ -171,7 +172,7 @@ export function opsBox(task, { now = new Date(), timeZone = TIMEZONE, isAgency =
   if (isUrgent(task, now, timeZone)) return "urgent";
   if (task.format === "Web" || task.platform === "Web Sitesi") return "web";
   if (isAgency(task)) return "agency";
-  if (task.format === "Reklam" || AD_PLATFORMS.has(task.platform)) return "ads";
+  if (AD_FORMATS.has(task.format) || AD_PLATFORMS.has(task.platform)) return "ads";
   return "active";
 }
 

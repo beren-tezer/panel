@@ -230,7 +230,7 @@ try {
     const doneRows = rows.filter((r) => /Tamamlandı|Onaylandı/.test(r.querySelector("button[aria-label^='Durum']")?.textContent || r.textContent));
     return { overdue: $$("[data-deadline='overdue']").map((e) => e.textContent).slice(0, 3), anyOverdue: $$("[data-task-row] [data-deadline='overdue']").length,
       falseOverdue: doneRows.filter((r) => r.querySelector("[data-deadline='overdue']")).length, doneLabels: doneRows.filter((r) => r.querySelector("[data-deadline='done']")).length, done: doneRows.length,
-      timed: $$("[data-deadline='soon'], [data-deadline='upcoming']").map((e) => e.textContent.replace("Son teslim: ", "")).filter((t) => /^(Bugün|Yarın|\\d{1,2} \\S+), \\d{2}:\\d{2}$/.test(t)).slice(0, 3) };`);
+      timed: $$("[data-deadline='soon'], [data-deadline='upcoming']").map((e) => e.textContent.replace("Bitiş tarihi: ", "")).filter((t) => /^(Bugün|Yarın|\\d{1,2} \\S+), \\d{2}:\\d{2}$/.test(t)).slice(0, 3) };`);
   check("Gecikmiş görevler 'Gecikti · …' olarak işaretlenir", dl.anyOverdue > 0 && dl.overdue.every((t) => t.includes("Gecikti")), dl.overdue.join(" | "));
   check("Tamamlanan görevler gecikmiş görünmez", dl.done > 0 && dl.falseOverdue === 0 && dl.doneLabels === dl.done, `${dl.done} teslim edilmiş görev`);
   check("Yaklaşan teslimler gün + saatle gösterilir", dl.timed.length > 0, dl.timed.join(" | "));

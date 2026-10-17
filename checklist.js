@@ -22,7 +22,7 @@ export const CHECK_CATEGORIES = {
   technical: "Teknik Kontroller",
   other: "Diğer Kontroller",
 };
-export const TASK_TYPES = ["Reels", "Gönderi", "Hikâye", "Karusel", "Video", "Web", "Reklam", "Rapor"];
+export const TASK_TYPES = ["Sosyal Medya", "Reklam İşleri", "Dijital Pazarlama", "Reels", "Gönderi", "Hikâye", "Karusel", "Video", "Web", "Reklam", "Rapor"];
 export const CREATIVE_TASK_TYPES = TASK_TYPES.filter((t) => t !== "Rapor");
 
 /* "Onaya Gönder" ile girilen aşamalar ve gönderimden sonra kontrollerin kilitlendiği aşamalar. */

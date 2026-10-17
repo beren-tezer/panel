@@ -216,6 +216,11 @@ const PRIORITY_META = {
   "Düşük": { cls: "text-slate-400", dot: "bg-slate-300", rank: 2 },
 };
 const PLATFORMS = ["Instagram", "TikTok", "Facebook", "LinkedIn", "YouTube", "Web Sitesi", "Meta Reklam", "Google Reklam"];
+/* Yeni Görev formu: görev türü seçenekleri ve yalnızca "Sosyal Medya" görevinde seçilen platformlar (diğer türlerde platform boş
+   kaydedilir; veritabanında 011_task_types.sql gerekir). Eski türler / platformlar mevcut görevlerde ve görev detayında durur. */
+const NEW_TASK_TYPES = ["Sosyal Medya", "Reklam İşleri", "Dijital Pazarlama"];
+const SOCIAL_TASK_TYPE = "Sosyal Medya";
+const SOCIAL_PLATFORMS = ["Instagram", "TikTok", "Facebook", "LinkedIn", "YouTube"];
 const PLATFORM_DOT = {
   Instagram: "bg-pink-500", TikTok: "bg-slate-900", Facebook: "bg-blue-600", LinkedIn: "bg-sky-700",
   YouTube: "bg-red-600", "Web Sitesi": "bg-emerald-600", "Meta Reklam": "bg-indigo-500", "Google Reklam": "bg-amber-500",
@@ -440,7 +445,7 @@ function seedDescription(brief, format, brand) {
 /* Demo kontrol listesi şablonları: tüm markalar için varsayılan + Tepe Emlak'a özel sosyal medya listesi. */
 const DEMO_CHECKLIST_TEMPLATES = demoTemplates([
   {
-    brandId: "b-tepe", name: "Tepe Emlak — Sosyal Medya Kontrol Listesi", taskTypes: ["Gönderi", "Karusel", "Hikâye", "Reels"],
+    brandId: "b-tepe", name: "Tepe Emlak — Sosyal Medya Kontrol Listesi", taskTypes: ["Gönderi", "Karusel", "Hikâye", "Reels", "Sosyal Medya"],
     items: [
       { title: "Logo sağ alt köşede kullanıldı.", description: "Beyaz zeminde lacivert, koyu zeminde beyaz logo.", category: "visual", isRequired: true, isEnabled: true, recheckOnRevision: true },
       { title: "Kurumsal renk paletine uyuldu.", description: "", category: "visual", isRequired: true, isEnabled: true, recheckOnRevision: true },
@@ -1028,6 +1033,7 @@ function StatusPill({ status, small, chevron }) {
 }
 
 function PlatformChip({ platform }) {
+  if (!platform) return null; // platformsuz görev (Reklam İşleri, Dijital Pazarlama)
   return (
     <span className="inline-flex items-center gap-1 h-5 px-1.5 rounded-md bg-slate-100 text-slate-600 cw-10 font-semibold whitespace-nowrap">
       <span className={`h-1.5 w-1.5 rounded-full ${PLATFORM_DOT[platform] || "bg-slate-400"}`} />{platform}
@@ -1219,7 +1225,7 @@ function PlatformMenu({ value, onChange }) {
       value={value} onChange={onChange} title="Platform" width={200} ariaLabel="Platform seç"
       options={PLATFORMS.map((p) => ({ value: p, label: p }))}
       renderOption={(o) => <><span className={`h-2 w-2 rounded-full ${PLATFORM_DOT[o.value]}`} /><span>{o.label}</span></>}
-      renderTrigger={(v) => <span className="inline-flex items-center gap-1"><PlatformChip platform={v} /><ChevronDown size={11} className="text-slate-400" /></span>}
+      renderTrigger={(v) => <span className="inline-flex items-center gap-1">{v ? <PlatformChip platform={v} /> : <span className="cw-12 text-slate-400">Platform yok</span>}<ChevronDown size={11} className="text-slate-400" /></span>}
     />
   );
 }
@@ -1463,7 +1469,7 @@ function DeadlineLabel({ task, className = "" }) {
   const Icon = DEADLINE_ICONS[info.state] || Clock;
   return (
     <span className={`inline-flex items-center gap-1 whitespace-nowrap ${DEADLINE_TONES[info.state]} ${className}`} title={info.title} data-deadline={info.state}>
-      <Icon size={11} aria-hidden="true" className="shrink-0" /><span className="sr-only">Son teslim: </span>{info.label}
+      <Icon size={11} aria-hidden="true" className="shrink-0" /><span className="sr-only">Bitiş tarihi: </span>{info.label}
     </span>
   );
 }
@@ -2843,11 +2849,12 @@ const inputCls = (err) => `h-9 w-full rounded-lg border px-3 cw-13 outline-none 
 function NewTaskModal({ presetBrandId, defaultDate, onClose, onCreated }) {
   const { state } = useWS();
   const [form, setForm] = useState({
-    title: "", brandId: presetBrandId || state.brands[0]?.id || "", platform: "Instagram", format: "Gönderi", assigneeId: "",
+    title: "", brandId: presetBrandId || state.brands[0]?.id || "", platform: SOCIAL_PLATFORMS[0], format: SOCIAL_TASK_TYPE, assigneeId: "",
     status: "Başlanmadı", priority: "Orta", publishDate: defaultDate, dueDate: defaultDate, dueTime: "", description: "",
   });
   const [errors, setErrors] = useState({});
   const set = (k, v) => { setForm((f) => ({ ...f, [k]: v })); setErrors((e) => ({ ...e, [k]: "" })); };
+  const isSocial = form.format === SOCIAL_TASK_TYPE; // Platform alanı yalnızca Sosyal Medya görevinde görünür
   const submit = (e) => {
     e.preventDefault();
     const next = {};
@@ -2858,7 +2865,7 @@ function NewTaskModal({ presetBrandId, defaultDate, onClose, onCreated }) {
     if (Object.keys(next).length) return;
     const now = new Date().toISOString();
     onCreated({
-      id: uid(), code: null, brandId: form.brandId, title: form.title.trim(), platform: form.platform, format: form.format,
+      id: uid(), code: null, brandId: form.brandId, title: form.title.trim(), platform: isSocial ? form.platform : "", format: form.format,
       assigneeId: form.assigneeId, status: form.status, priority: form.priority, publishDate: form.publishDate || form.dueDate, dueDate: form.dueDate, dueTime: normalizeTime(form.dueTime),
       description: form.description.trim() ? form.description.trim().split(/\n{2,}/).map((p) => `<p>${escHtml(p).replace(/\n/g, "<br>")}</p>`).join("") : "",
       createdAt: now, updatedAt: now,
@@ -2882,12 +2889,14 @@ function NewTaskModal({ presetBrandId, defaultDate, onClose, onCreated }) {
             {USERS.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
         </Field>
-        <Field label="Platform">
-          <select value={form.platform} onChange={(e) => set("platform", e.target.value)} className={inputCls()}>{PLATFORMS.map((p) => <option key={p}>{p}</option>)}</select>
-        </Field>
         <Field label="Görev Türü">
-          <select value={form.format} onChange={(e) => set("format", e.target.value)} className={inputCls()}>{FORMATS.map((p) => <option key={p}>{p}</option>)}</select>
+          <select value={form.format} onChange={(e) => set("format", e.target.value)} aria-label="Görev Türü" className={inputCls()}>{NEW_TASK_TYPES.map((p) => <option key={p}>{p}</option>)}</select>
         </Field>
+        {isSocial && (
+          <Field label="Platform">
+            <select value={form.platform} onChange={(e) => set("platform", e.target.value)} aria-label="Platform" className={inputCls()}>{SOCIAL_PLATFORMS.map((p) => <option key={p}>{p}</option>)}</select>
+          </Field>
+        )}
         <Field label="Durum">
           <select value={form.status} onChange={(e) => set("status", e.target.value)} className={inputCls()}>{STATUSES.map((p) => <option key={p}>{p}</option>)}</select>
         </Field>

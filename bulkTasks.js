@@ -6,11 +6,7 @@
  * görev kimliği (taskId) vardır — tekrar denemede aynı görev ikinci kez oluşturulmaz.
  */
 
-import { ALL_TASK_TYPES } from "./taskTypes.js";
-
-/* Geçerli görev türleri (tasks.format; tek kaynak taskTypes.js). Tablo bağlamı ctx.formats ile daraltılır:
-   Sosyal Medya Planından açılan tablo sosyal medya türlerini, diğer yerlerden açılan tablo genel görev türlerini kullanır. */
-export const BULK_FORMATS = ALL_TASK_TYPES;
+export const BULK_FORMATS = ["Reels", "Gönderi", "Hikâye", "Karusel", "Video", "Web", "Reklam", "Rapor"];
 export const BULK_PLATFORMS = ["Instagram", "TikTok", "Facebook", "LinkedIn", "YouTube", "Web Sitesi", "Meta Reklam", "Google Reklam"];
 export const MAX_BULK_ROWS = 500;
 
@@ -19,7 +15,7 @@ export const BULK_COLUMNS = [
   { key: "brand", label: "Marka", type: "brand", field: "brandId", width: 190 },
   { key: "title", label: "Görev Başlığı", type: "text", field: "title", width: 320 },
   { key: "platform", label: "Platform", type: "option", field: "platform", width: 150 },
-  { key: "format", label: "Görev Türü", type: "option", field: "format", width: 130 },
+  { key: "format", label: "Format", type: "option", field: "format", width: 130 },
   { key: "dueDate", label: "Teslim Tarihi", type: "date", field: "dueDate", width: 160 },
   { key: "dueTime", label: "Teslim Saati", type: "time", field: "dueTime", width: 120 },
   { key: "assignee", label: "Atanan Kişi", type: "user", field: "assigneeId", width: 190 },
@@ -35,11 +31,10 @@ const uuid = () => (globalThis.crypto && crypto.randomUUID ? crypto.randomUUID()
 /* ───────────────────────── Satır modeli ───────────────────────── */
 
 /* bad: eşleştirilemeyen ham değerler (ör. bilinmeyen marka adı) — kullanıcıya gösterilir, asla sessizce kaydedilmez. */
-/* defaults.format: tablonun bağlamındaki varsayılan görev türü. */
-export function newRow(carry = null, defaults = {}) {
+export function newRow(carry = null) {
   return {
     id: uuid(), taskId: uuid(),
-    brandId: carry?.brandId || "", title: "", platform: carry?.platform || "Instagram", format: carry?.format || defaults.format || "Gönderi",
+    brandId: carry?.brandId || "", title: "", platform: carry?.platform || "Instagram", format: carry?.format || "Gönderi",
     dueDate: "", dueTime: "", assigneeId: carry?.assigneeId || "", bad: {}, saved: null,
   };
 }
@@ -50,7 +45,7 @@ export const duplicateRow = (row) => ({ ...row, id: uuid(), taskId: uuid(), bad:
 /* Önceki satırdan taşınan alanlar (başlık taşınmaz). */
 export const carryFrom = (row) => (row ? { brandId: row.brandId, platform: row.platform, format: row.format, assigneeId: row.assigneeId } : null);
 
-/* Kullanıcının bir şey yazmadığı satır (varsayılan platform/görev türü ve taşınan değerler tek başına "dolu" sayılmaz). */
+/* Kullanıcının bir şey yazmadığı satır (varsayılan platform/format ve taşınan değerler tek başına "dolu" sayılmaz). */
 export function isEmptyRow(row) {
   return !row.title.trim() && !row.dueDate && !row.dueTime && !Object.values(row.bad || {}).some(Boolean);
 }
@@ -75,17 +70,13 @@ export function resolveUser(text, users) {
 
 const FORMAT_ALIASES = {
   reels: "Reels", reel: "Reels", post: "Gönderi", gonderi: "Gönderi", "tekli gonderi": "Gönderi", story: "Hikâye", stories: "Hikâye", hikaye: "Hikâye",
-  carousel: "Karusel", karusel: "Karusel", karosel: "Karusel", video: "Video", rapor: "Rapor", report: "Rapor",
-  web: "Web & Teknik", "web teknik": "Web & Teknik", teknik: "Web & Teknik", "web sitesi": "Web & Teknik",
-  reklam: "Reklam İşleri", reklamlar: "Reklam İşleri", ads: "Reklam İşleri", ad: "Reklam İşleri",
-  ajans: "Ajans İçi İşler", "ajans ici": "Ajans İçi İşler", "ajans isi": "Ajans İçi İşler", internal: "Ajans İçi İşler",
+  carousel: "Karusel", karusel: "Karusel", karosel: "Karusel", video: "Video", web: "Web", reklam: "Reklam", ads: "Reklam", ad: "Reklam", rapor: "Rapor", report: "Rapor",
 };
-/* formats: tablonun bağlamındaki geçerli türler; listede olmayan tür (ör. genel tabloda "Reels") tanınmaz. */
-export function resolveFormat(text, formats = BULK_FORMATS) {
+export function resolveFormat(text) {
   const t = norm(text);
   if (!t) return { value: "" };
-  const v = formats.find((f) => norm(f) === t) || FORMAT_ALIASES[t];
-  return v && formats.includes(v) ? { value: v } : { bad: String(text).trim() };
+  const v = FORMAT_ALIASES[t] || BULK_FORMATS.find((f) => norm(f) === t);
+  return v ? { value: v } : { bad: String(text).trim() };
 }
 
 const PLATFORM_ALIASES = { ig: "Instagram", insta: "Instagram", instagram: "Instagram", tiktok: "TikTok", tt: "TikTok", fb: "Facebook", facebook: "Facebook",
@@ -147,7 +138,7 @@ export function setCell(row, key, text, ctx) {
     case "user": r = resolveUser(text, ctx.users); break;
     case "date": r = parseDate(text, ctx.today); break;
     case "time": r = parseTime(text); break;
-    default: r = key === "format" ? resolveFormat(text, ctx.formats) : resolvePlatform(text);
+    default: r = key === "format" ? resolveFormat(text) : resolvePlatform(text);
   }
   const bad = { ...row.bad };
   if (r.bad != null) bad[key] = r.bad; else delete bad[key];
@@ -163,12 +154,12 @@ export function setValue(row, key, value) {
   return { ...row, [col.field]: value, bad };
 }
 
-export const clearCell = (row, key, defaults = {}) => {
+export const clearCell = (row, key) => {
   if (row.saved) return row;
   const bad = { ...row.bad };
   delete bad[key];
   const col = BULK_COLUMNS.find((c) => c.key === key);
-  const empty = { platform: "Instagram", format: defaults.format || "Gönderi" }[key] ?? "";
+  const empty = { platform: "Instagram", format: "Gönderi" }[key] ?? "";
   return { ...row, [col.field]: empty, bad };
 };
 
@@ -186,12 +177,12 @@ export function cellText(row, key, ctx) {
 /* ───────────────────────── Doğrulama ───────────────────────── */
 
 const LABEL_ERRORS = {
-  brand: (v) => `Marka bulunamadı: “${v}”.`, assignee: (v) => `Ekip üyesi bulunamadı: “${v}”.`, format: (v) => `Görev türü tanınmadı: “${v}”.`,
+  brand: (v) => `Marka bulunamadı: “${v}”.`, assignee: (v) => `Ekip üyesi bulunamadı: “${v}”.`, format: (v) => `Format tanınmadı: “${v}”.`,
   platform: (v) => `Platform tanınmadı: “${v}”.`, dueDate: (v) => `Teslim tarihi okunamadı: “${v}” (örn. 12.11.2026).`, dueTime: (v) => `Teslim saati okunamadı: “${v}” (örn. 16:30).`,
 };
 
 /* { sütun: mesaj }. Tamamen boş ve kaydedilmiş satırlar doğrulanmaz.
-   ctx: { brands (kullanıcının yetkili olduğu markalar), users (atanabilir ekip üyeleri), formats? (tablonun görev türleri) } */
+   ctx: { brands (kullanıcının yetkili olduğu markalar), users (atanabilir ekip üyeleri) } */
 export function validateRow(row, ctx) {
   if (row.saved || isEmptyRow(row)) return {};
   const e = {};
@@ -202,7 +193,7 @@ export function validateRow(row, ctx) {
   }
   if (!row.title.trim()) e.title = "Görev başlığı boş bırakılamaz.";
   if (!e.platform && !BULK_PLATFORMS.includes(row.platform)) e.platform = "Platform seçilmedi.";
-  if (!e.format && !(ctx.formats || BULK_FORMATS).includes(row.format)) e.format = "Görev türü seçilmedi.";
+  if (!e.format && !BULK_FORMATS.includes(row.format)) e.format = "Format seçilmedi.";
   if (!e.dueDate && !row.dueDate) e.dueDate = "Teslim tarihi girilmedi.";
   if (!e.assignee && row.assigneeId && !ctx.users.some((u) => u.id === row.assigneeId)) e.assignee = "Bu kişiye görev atanamaz.";
   return e;
@@ -284,7 +275,7 @@ const HEADER_ALIASES = {
   brand: ["marka", "brand", "musteri", "client"],
   title: ["gorev basligi", "gorev", "baslik", "icerik", "task", "title", "is"],
   platform: ["platform", "kanal", "channel"],
-  format: ["gorev turu", "gorev tipi", "format", "tur", "icerik turu", "type"],
+  format: ["format", "tur", "icerik turu", "type"],
   dueDate: ["teslim tarihi", "son teslim", "tarih", "teslim", "deadline", "due date", "due", "date"],
   dueTime: ["teslim saati", "saat", "time", "due time"],
   assignee: ["atanan kisi", "atanan", "sorumlu", "kisi", "ekip uyesi", "assignee", "owner"],
@@ -313,7 +304,7 @@ export function applyPaste(rows, anchor, matrix, ctx, { carry = false } = {}) {
     while (r < out.length && out[r].saved) r++;
     if (r >= out.length) {
       if (out.length >= MAX_BULK_ROWS) { truncated = true; break; }
-      out.push(newRow(carry ? carryFrom(out[out.length - 1]) : null, ctx.defaults)); added++;
+      out.push(newRow(carry ? carryFrom(out[out.length - 1]) : null)); added++;
     }
     let row = out[r];
     header.forEach((key, j) => { if (key && j < cells.length) row = setCell(row, key, cells[j], ctx); });

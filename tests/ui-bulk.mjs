@@ -24,16 +24,13 @@ const cell = (r, c) => page(`const td = $("[data-cell='${r}:${c}']"); if (!td) r
 const clickCell = (r, c) => page(`const td = $("[data-cell='${r}:${c}']"); td.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 })); return true;`);
 const summary = () => page(`return Object.fromEntries($$("[data-summary]").map((d) => [d.dataset.summary, +d.querySelector("dd").textContent]));`);
 const toasts = () => page(`return $$("[role='status'],[role='alert']").map((x) => x.textContent).join(" | ");`);
-// Sosyal medya içerikleri (Reels / Gönderi …) toplu girişi Sosyal Medya Planından açılır (görev türü bağlamı: sosyal medya).
 const openSheet = async () => {
-  await page(`$$("aside button").find((b) => b.textContent.includes("Sosyal Medya Planı")).click();`);
-  await waitFor(() => page(`return !!$("[data-social-plan]") && !!$("button[aria-label='Toplu Görev Ekle']");`), 4000);
   await page(`$("button[aria-label='Toplu Görev Ekle']").click();`);
   await waitFor(() => page(`return !!$("[data-bulk-sheet]");`), 4000);
 };
 const pasteTSV = (text) => page(`const dt = new DataTransfer(); dt.setData("text/plain", ${JSON.stringify(text)}); $("[data-bulk-grid]").dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true })); return true;`);
 const plannerTitles = async (needle) => {
-  await page(`$$("aside button").find((b) => b.textContent.includes("Genel Bakış")).click();`);
+  await page(`$$("aside button").find((b) => b.textContent.includes("İçerik Planlayıcı")).click();`);
   await sleep(300);
   return page(`return $$("table button").map((b) => b.textContent.trim()).filter((t) => t.includes(${JSON.stringify(needle)}));`);
 };
@@ -49,7 +46,7 @@ try {
   await openSheet();
   const head = await page(`return { cols: $$("[data-bulk-grid] thead th").map((t) => t.textContent.trim()), rows: $$("[data-sheet-row]").length, sidebar: !!$("aside nav, aside button"), title: document.body.textContent.includes("Toplu Görev Ekle") };`);
   check("Spreadsheet açılır: sütunlar, 5 başlangıç satırı, sidebar korunur",
-    head.cols.join("|") === "Sıra|Marka|Görev Başlığı|Platform|Görev Türü|Teslim Tarihi|Teslim Saati|Atanan Kişi|İşlemler" && head.rows === 5 && head.sidebar, JSON.stringify(head));
+    head.cols.join("|") === "Sıra|Marka|Görev Başlığı|Platform|Format|Teslim Tarihi|Teslim Saati|Atanan Kişi|İşlemler" && head.rows === 5 && head.sidebar, JSON.stringify(head));
 
   /* 2. Yeni satır */
   await page(`exact("button", "Yeni Satır").click();`);
@@ -103,7 +100,7 @@ try {
   await press("1"); await type("630"); await press("Enter");
   check("Tarih ve saat klavyeyle girilir (12.11.2026 / 1630 → 16:30)", (await cell(0, 4)) === "12 Kasım 2026" && (await cell(0, 5)) === "16:30", `${await cell(0, 4)} ${await cell(0, 5)}`);
   await clickCell(0, 3); await press("p"); await type("ost"); await press("Enter");
-  check("Görev türü eşleşir (post → Gönderi)", (await cell(0, 3)) === "Gönderi", await cell(0, 3));
+  check("Format eşleşir (post → Gönderi)", (await cell(0, 3)) === "Gönderi", await cell(0, 3));
 
   /* 3. Enter son satırda yeni satır oluşturur; önceki satırdan taşıma */
   const before = await rowsCount();
@@ -113,7 +110,7 @@ try {
   await page(`exact("button", "Yeni Satır").click();`);
   const n = await rowsCount();
   await clickCell(0, 0); // satır 0'dan değer kopyalamak için son satırı kontrol et
-  check("Yeni satır önceki satırın marka / görev türü / kişisini taşır, başlığı taşımaz", (await cell(n - 1, 1)) === "Görev başlığı yazın" && (await cell(n - 1, 3)) === (await cell(n - 2, 3)));
+  check("Yeni satır önceki satırın marka / format / kişisini taşır, başlığı taşımaz", (await cell(n - 1, 1)) === "Görev başlığı yazın" && (await cell(n - 1, 3)) === (await cell(n - 2, 3)));
 
   /* 5. Çoğaltma ve silme */
   const r0 = await page(`return $("[data-sheet-row]").dataset.sheetRow;`);
@@ -194,19 +191,19 @@ try {
   await waitFor(() => page(`return !$("[data-bulk-sheet]");`), 2000);
   const inPlanner = await plannerTitles("Toplu içerik");
   check("Kaydedilen görevler İçerik Planlayıcı'da görünür, her biri bir kez", inPlanner.length === 18 && new Set(inPlanner).size === 18, `${inPlanner.length} / ${new Set(inPlanner).size}`);
-  await page(`$$("aside button").find((b) => b.textContent.includes("Genel Bakış")).click();`);
+  await page(`$$("aside button").find((b) => b.textContent.includes("İçerik Planlayıcı")).click();`);
   const found = await waitFor(() => page(`return !!$$("table button").find((x) => x.textContent.trim() === "Toplu içerik 1");`), 4000).catch(() => false);
   if (!found) console.log("   planlayıcıdaki başlıklar:", (await page(`return $$("table button").map((x) => x.textContent.trim()).filter((t) => t.includes("Toplu")).slice(0, 5).join(" | ");`)));
   const opened = !found ? null : await page(`$$("table button").find((x) => x.textContent.trim() === "Toplu içerik 1").click(); await tick(400); const d = $("aside[aria-label='Görev detayı']"); return d ? { a: d.textContent.includes("Ayşe Demir") || d.textContent.includes("Elif Tuna"), code: (d.textContent.match(/CW-[0-9]+/) || [])[0], cl: !!d.querySelector("[data-checklist]") } : null;`);
   check("Kaydedilen görev detayı açılır: kod, atanan kişi, kontrol listesi", opened && opened.a && !!opened.code && opened.cl, JSON.stringify(opened));
   await page(`$("button[aria-label='Detayı kapat']")?.click(); return true;`);
-  await page(`$$("aside button").find((b) => b.textContent.includes("Genel Bakış")).click();`);
+  await page(`$$("aside button").find((b) => b.textContent.includes("Günlük Operasyon Akışı")).click();`);
   await sleep(200);
   const feed = await page(`const card = $("[data-brand-card='b-tepe']"); return card ? card.textContent.includes("Toplu içerik") || true : false;`);
   check("Günlük Operasyon Akışı ekranı güncel durumla açılır (marka kartı)", feed);
 
   /* 13. Taslak koruma ve geri yükleme */
-  await page(`$$("aside button").find((b) => b.textContent.includes("Genel Bakış")).click();`);
+  await page(`$$("aside button").find((b) => b.textContent.includes("Günlük Operasyon Akışı")).click();`);
   await openSheet();
   await clickCell(0, 1); await press("T"); await type("aslak görevi A"); await press("Enter");
   await press("T"); await type("aslak görevi B"); await press("Enter");

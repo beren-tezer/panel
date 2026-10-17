@@ -1638,20 +1638,23 @@ function FilterSelect({ label, value, onChange, options, selectRef }) {
   );
 }
 
+/* Üst bant renk geçişi (kurumsal görsel "renk geçişi"): turkuaz → pudra → turuncu → sarı. */
+const TOPBAR_GRADIENT = "linear-gradient(90deg, #00ADA7 0%, #C298A4 33%, #EC7D46 66%, #F9DE08 100%)";
+
 function TopBar({ title, brand, filters, setFilter, onMenu, onNewTask, onBulk, showFilters = true, showAssigneeFilter = true, searchPlaceholder = "Görev, marka veya kişi ara…", eyebrow = "ÇALIŞMA ALANI", searchRef, firstFilterRef, filtersOpen, setFiltersOpen, flash, activeCount, onClear, resultCount }) {
   return (
     <header className="bg-white border-b border-slate-200 shrink-0" style={{ zIndex: 30 }}>
-      <div className="h-16 flex items-center gap-3 px-4 lg:px-6">
-        <button type="button" onClick={onMenu} className="lg:hidden h-9 w-9 -ml-1 flex items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100" aria-label="Menüyü aç"><Menu size={19} /></button>
+      <div className="h-16 flex items-center gap-3 px-4 lg:px-6" style={{ background: TOPBAR_GRADIENT }} data-topbar-band="">
+        <button type="button" onClick={onMenu} className="lg:hidden h-9 w-9 -ml-1 flex items-center justify-center rounded-lg text-slate-900 hover:bg-white/30" aria-label="Menüyü aç"><Menu size={19} /></button>
         <div className="hidden sm:flex items-center gap-2.5 min-w-0 shrink">
           {brand ? <BrandLogo brand={brand} size={34} /> : <span className="h-9 w-9 rounded-lg bg-slate-900 text-white flex items-center justify-center shrink-0"><Layers size={16} /></span>}
           <div className="min-w-0">
-            <p className="cw-10 font-semibold tracking-widest text-slate-400 truncate">{eyebrow} · {fmtDateDay(TODAY).toLocaleUpperCase("tr-TR")}</p>
+            <p className="cw-10 font-semibold tracking-widest text-slate-900/70 truncate">{eyebrow} · {fmtDateDay(TODAY).toLocaleUpperCase("tr-TR")}</p>
             <h1 className="text-lg font-bold tracking-tight text-slate-900 truncate leading-tight">{title}</h1>
           </div>
         </div>
         <div className="flex-1 min-w-0 flex justify-end sm:justify-center">
-          <label className="w-full max-w-md flex items-center gap-2 h-9 px-3 rounded-lg border border-slate-200 bg-slate-50 focus-within:bg-white focus-within:border-orange-300 focus-within:ring-2 focus-within:ring-orange-100">
+          <label className="w-full max-w-md flex items-center gap-2 h-9 px-3 rounded-lg border border-white/60 bg-white/85 focus-within:bg-white focus-within:border-orange-300 focus-within:ring-2 focus-within:ring-orange-100">
             <Search size={15} className="text-slate-400 shrink-0" />
             <input ref={searchRef} value={filters.search} onChange={(e) => setFilter("search", e.target.value)} placeholder={searchPlaceholder} aria-label="Genel arama" className="flex-1 min-w-0 bg-transparent outline-none cw-13 placeholder:text-slate-400" />
             {filters.search ? (

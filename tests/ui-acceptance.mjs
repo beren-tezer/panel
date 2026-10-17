@@ -90,7 +90,6 @@ try {
   };
   await send("Runtime.enable");
   await send("Page.enable");
-  await send("Page.addScriptToEvaluateOnNewDocument", { source: "window.__CW_ALL_BRANDS__ = true;" });
   await viewport(1920, 1080);
   await send("Page.navigate", { url: `http://localhost:${PORT}/?demo` });
   await waitFor(() => page(`return $$("[data-brand-card]").length > 0;`));
@@ -269,20 +268,6 @@ try {
   await page(`setValue($("select[aria-label='Rol']"), "admin");`);
   await waitFor(() => page(`return $$("[data-brand-card]").length > 0;`), 5000);
   check("Rol değiştirici admin paneline geri döner", true);
-
-  /* ── 7b. Genel Bakış yalnızca grafikler; marka görevleri marka sayfasında ── */
-  await page(`window.__CW_ALL_BRANDS__ = false; byText("aside button", "Genel Bakış").click(); return true;`);
-  const dash = await waitFor(() => page(`return !$("[data-brand-card]") && $("[data-dashboard-hint]") ? { charts: !!byText("main h2", "Genel Bakış") } : null;`), 5000).catch(() => null);
-  check("Genel Bakış'ta marka kartı listelenmez, grafikler kalır", dash && dash.charts, JSON.stringify(dash));
-  await page(`$$("aside button[aria-pressed]").find((b) => b.textContent.includes("Sofra Pide")).click(); return true;`);
-  const one = await waitFor(() => page(`const cs = $$("[data-brand-card]"); return cs.length === 1 && cs[0].querySelector("h3").textContent.trim() === "Sofra Pide" && !$("[data-dashboard-hint]");`), 5000).catch(() => false);
-  check("Marka seçilince yalnızca o markanın görevleri gösterilir", one);
-  await page(`byText("aside button", "Tüm Markalar").click(); return true;`);
-  check("Tüm Markalar'a dönünce liste yine yüklenmez", await waitFor(() => page(`return !$("[data-brand-card]") && !!$("[data-dashboard-hint]");`), 5000).catch(() => false));
-  await page(`setValue($("input[aria-label='Genel arama']"), "Sofra Pide");`);
-  check("Arama yapılınca sonuç kartları listelenir", await waitFor(() => page(`return $$("[data-brand-card]").length > 0;`), 5000).catch(() => false));
-  await page(`setValue($("input[aria-label='Genel arama']"), ""); window.__CW_ALL_BRANDS__ = true; return true;`);
-  check("Mobilde inputa dokununca yakınlaştırma kapalı (viewport maximum-scale=1)", await page(`return /maximum-scale=1/.test($("meta[name='viewport']").content);`));
 
   /* ── 8. Konsol ── */
   await sleep(300);

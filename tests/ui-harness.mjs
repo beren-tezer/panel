@@ -82,7 +82,6 @@ export async function startHarness({ port = 5179, debugPort = 9333, viteArgs = [
   };
   await send("Runtime.enable");
   await send("Page.enable");
-  await send("Page.addScriptToEvaluateOnNewDocument", { source: "window.__CW_ALL_BRANDS__ = true;" });
   await send("Browser.grantPermissions", { permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"], origin: `http://localhost:${port}` }).catch(() => {});
 
   const close = async () => {

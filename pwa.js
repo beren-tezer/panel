@@ -84,8 +84,10 @@ export function pwaPlugin() {
       const meta = (name, content) => ({ tag: "meta", attrs: { name, content }, injectTo: "head" });
       return [
         { tag: "link", attrs: { rel: "manifest", href: `${base}manifest.webmanifest` }, injectTo: "head" },
-        { tag: "link", attrs: { rel: "icon", type: "image/svg+xml", href: `${base}icons/favicon.svg` }, injectTo: "head" },
-        { tag: "link", attrs: { rel: "apple-touch-icon", href: `${base}icons/apple-touch-icon.png` }, injectTo: "head" },
+        // Simgeler public/icons/app-icon.png'den üretilir (npm run icons).
+        { tag: "link", attrs: { rel: "icon", href: `${base}favicon.ico`, sizes: "any" }, injectTo: "head" },
+        { tag: "link", attrs: { rel: "icon", type: "image/png", sizes: "32x32", href: `${base}icons/favicon-32.png` }, injectTo: "head" },
+        { tag: "link", attrs: { rel: "apple-touch-icon", sizes: "180x180", href: `${base}icons/apple-touch-icon.png` }, injectTo: "head" },
         meta("theme-color", manifest.theme_color),
         meta("mobile-web-app-capable", "yes"),
         meta("apple-mobile-web-app-capable", "yes"),

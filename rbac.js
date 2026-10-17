@@ -196,7 +196,9 @@ export function canEditContentVersion(user, task, state) {
 
 /* ───────────────────────── İşlem yetkilendirme ───────────────────────── */
 
-const ASSIGN_FIELDS = new Set(["assigneeId", "brandId", "dueDate", "dueTime", "priority", "checklistDisabled"]);
+const ASSIGN_FIELDS = new Set(["assigneeId", "reporterId", "brandId", "dueDate", "dueTime", "priority", "checklistDisabled"]);
+/* Görevi Veren / Takipçi yalnızca aktif bir admin olabilir (veritabanında 012 tetikleyicisi). */
+const reporterOk = (state, id) => !id || state.users.some((u) => u.id === id && u.role === "admin" && u.active !== false);
 const CONTENT_FIELDS = new Set(["title", "description", "platform", "format", "publishDate"]);
 const DENIED = "Bu işlem için yetkiniz yok.";
 
@@ -207,6 +209,7 @@ export function authorize(user, action, state, allStatuses) {
   const seeTask = (id) => { const t = task(id); return t && canSeeTask(user, t, state) ? t : null; };
   switch (action.type) {
     case "ADD_TASK":
+      if (!reporterOk(state, action.task.reporterId)) return "Görevi veren / takipçi yalnızca bir yönetici olabilir.";
       return p.has("canCreateTasks") && canSeeBrand(user, action.task.brandId, state) ? null : DENIED;
     case "ADD_TASKS":
     case "CREATE_TASKS": {
@@ -232,6 +235,7 @@ export function authorize(user, action, state, allStatuses) {
         // Onay aşamalarına yalnızca kontrol listesi doğrulamasıyla (SUBMIT_TASK) geçilir; veritabanı da doğrudan geçişi reddeder.
         if (key === "status" && action.patch.status !== t.status && REVIEW_STATUSES.has(action.patch.status)) return "İçeriği onaya göndermek için “Onaya Gönder” kullanın.";
         if (key === "brandId" && !canSeeBrand(user, action.patch.brandId, state)) return DENIED;
+        if (key === "reporterId" && !reporterOk(state, action.patch.reporterId)) return "Görevi veren / takipçi yalnızca bir yönetici olabilir.";
       }
       return null;
     }

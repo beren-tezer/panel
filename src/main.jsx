@@ -32,7 +32,7 @@ if (authDemo) {
 } else if (supabaseConfigError) {
   root.render(<p style={{ fontFamily: "system-ui", padding: 24, color: "#b91c1c" }}>{supabaseConfigError}</p>);
 } else {
-  const source = createSupabaseSource(supabase, { storage: supabaseConfig, callback: authCallback });
+  const source = createSupabaseSource(supabase, { storage: supabaseConfig, callback: authCallback, vapidKey: import.meta.env.VITE_VAPID_PUBLIC_KEY || "" });
   root.render(
     <React.StrictMode>
       <App source={source} />

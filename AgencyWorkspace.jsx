@@ -32,6 +32,7 @@ import {
   assignableUsers, authorize, can, canEditBrandKit, canImpersonate, canEditContentVersion, canManageChecklists, canViewBrandKit, canViewChecklist, canWorkChecklist, isOpen, permissionsFor, roleOf,
   scopeBrandKit, scopeState, statusOptionsFor,
 } from "./rbac.js";
+import { assignRecipients, statusRecipients } from "./notifyRules.js";
 import {
   Activity, AlertTriangle, Archive, ArrowDown, ArrowUp, Bold, BookOpen, Calendar, CalendarDays, CalendarRange, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
   Circle, ClipboardCheck, EyeOff, KeyRound, Globe, Megaphone, ClipboardList, Clock, Copy, Download, ExternalLink, Eye, File as FileIcon, FileImage, FileText, Film, Flag, Folder, FolderOpen, HardDrive, Heading, History, ListChecks,
@@ -515,7 +516,7 @@ function createDemoState(checklistApi) {
     const id = uid();
     const createdAt = new Date(now - (4 + (i % 5)) * 864e5).toISOString();
     tasks.push({
-      id, code: `CW-${++taskNo}`, brandId, title, platform, format, assigneeId, status, priority,
+      id, code: `CW-${++taskNo}`, brandId, title, platform, format, assigneeId, reporterId: i % 2 ? "u1" : "", status, priority, // demo: yarısının takipçisi var
       publishDate: addDays(TODAY, pub), dueDate: addDays(TODAY, due), dueTime: DEMO_DUE_TIMES[i % DEMO_DUE_TIMES.length],
       description: seedDescription(brief, format, brand), createdAt, updatedAt: createdAt,
     });
@@ -611,13 +612,13 @@ function createDemoState(checklistApi) {
 /* ───────────────────────── Merkezi durum (reducer) ───────────────────────── */
 
 const FIELD_LABELS = {
-  status: "durumu", priority: "önceliği", assigneeId: "sorumluyu", platform: "platformu", format: "görev türünü",
+  status: "durumu", priority: "önceliği", assigneeId: "görevi yapanı", reporterId: "görevi veren / takipçiyi", platform: "platformu", format: "görev türünü",
   dueDate: "bitiş tarihini", dueTime: "teslim saatini", publishDate: "başlama tarihini", brandId: "markayı", title: "başlığı",
   checklistDisabled: "kontrol listesini",
 };
 
 function describeField(key, value, state) {
-  if (key === "assigneeId") return USER_BY_ID[value]?.name || "Atanmamış";
+  if (key === "assigneeId" || key === "reporterId") return USER_BY_ID[value]?.name || "Atanmamış";
   if (key === "brandId") return state.brands.find((b) => b.id === value)?.name || "Bilinmeyen marka";
   if (key === "dueDate" || key === "publishDate") return value ? fmtDateLong(value) : "Tarihsiz";
   if (key === "dueTime") return value || "gün sonu";
@@ -652,19 +653,23 @@ function makeNotifications(recipients, taskId, kind, text, now) {
 function workflowNotifications(state, prev, next, now) {
   const actor = USER_BY_ID[ME]?.name || "Bir ekip üyesi";
   const out = [];
+  // Kurallar notifyRules.js'te: durum → yalnızca Görevi Veren / Takipçi (Müşteri Onayı'nda + markanın müşterisi); atama → Görevi Yapan.
   if (prev.status !== next.status) {
-    if (next.status === "Müşteri Onayı") {
-      const again = state.approvals.some((a) => a.taskId === next.id && a.decision === "revision");
-      out.push(...makeNotifications(brandClientIds(state, next.brandId), next.id, "review", again ? `“${next.title}” revize edildi ve tekrar onayınıza sunuldu.` : `“${next.title}” onayınıza sunuldu.`, now));
-      out.push(...makeNotifications(adminIds(state), next.id, "status", `${actor} “${next.title}” içeriğini ${again ? "tekrar " : ""}müşteri onayına gönderdi.`, now));
-    } else if (next.status === "Yönetici Onayı") {
-      out.push(...makeNotifications(adminIds(state), next.id, "status", `${actor} “${next.title}” için yönetici onayı istiyor.`, now));
-    } else if (next.status === "Tamamlandı" && prev.status === "Onaylandı") {
-      out.push(...makeNotifications(brandClientIds(state, next.brandId), next.id, "status", `Onayladığınız “${next.title}” yayınlandı.`, now));
-    }
+    const again = state.approvals.some((a) => a.taskId === next.id && a.decision === "revision");
+    const { team, clients } = statusRecipients(next, next.status, { adminIds: adminIds(state), clientIds: brandClientIds(state, next.brandId) });
+    const TEXTS = {
+      "Çalışılıyor": `${actor} “${next.title}” görevine başladı.`,
+      "Revizyon": `${actor} “${next.title}” görevini revizyona aldı.`,
+      "Yönetici Onayı": `${actor} “${next.title}” için yönetici onayı istiyor.`,
+      "Müşteri Onayı": `${actor} “${next.title}” içeriğini ${again ? "tekrar " : ""}müşteri onayına gönderdi.`,
+      "Onaylandı": `${actor} “${next.title}” içeriğini onaylandı olarak işaretledi.`,
+      "Tamamlandı": `${actor} “${next.title}” görevini tamamladı.`,
+    };
+    if (team.length) out.push(...makeNotifications(team, next.id, "status", TEXTS[next.status], now));
+    if (clients.length) out.push(...makeNotifications(clients, next.id, "review", again ? `“${next.title}” revize edildi ve tekrar onayınıza sunuldu.` : `“${next.title}” onayınıza sunuldu.`, now));
   }
   if (prev.assigneeId !== next.assigneeId && next.assigneeId) {
-    out.push(...makeNotifications([next.assigneeId], next.id, "assign", `${actor} “${next.title}” görevini size atadı.`, now));
+    out.push(...makeNotifications(assignRecipients(next), next.id, "assign", `${actor} “${next.title}” görevini size atadı.`, now));
   }
   return out;
 }
@@ -774,7 +779,7 @@ function reducer(state, action) {
         approvalRequests: (state.approvalRequests || []).map((r) => (r.id === action.requestId && r.status === "pending" ? { ...r, status: approved ? "approved" : "revision_requested", closedAt: now } : r)),
         approvals: [approval, ...state.approvals],
         activity: [log(task.id, approved ? "içeriği onayladı" : `revize talep etti: “${approval.note}”`), ...state.activity],
-        notifications: [...makeNotifications([task.assigneeId, ...adminIds(state)], task.id, approved ? "approved" : "revision", text, now), ...state.notifications],
+        notifications: [...makeNotifications(statusRecipients(task, status, { adminIds: adminIds(state) }).team, task.id, approved ? "approved" : "revision", text, now), ...state.notifications],
       };
     }
     case "ADD_USER":
@@ -872,7 +877,10 @@ const useWS = () => useContext(WorkspaceContext);
 
 /* ───────────────────────── Filtreleme & sıralama ───────────────────────── */
 
-const emptyFilters = () => ({ search: "", dateScope: "all", customDate: TODAY, status: "all", assignee: "all", platform: "all" });
+const emptyFilters = () => ({ search: "", dateScope: "all", customDate: TODAY, status: "all", assignee: "all", reporter: "all", platform: "all" });
+/* Görevi Yapan / Görevi Veren süzgeçleri (Genel Bakış kutuları da bunlara uyar). */
+const matchPeople = (t, f) => (f.assignee === "none" ? !t.assigneeId : f.assignee === "all" || t.assigneeId === f.assignee)
+  && (f.reporter === "none" ? !t.reporterId : f.reporter === "all" || t.reporterId === f.reporter);
 /* Gecikme; son teslim tarihi + saati, teslim durumu ve ajans saat dilimine göre hesaplanır (bkz. taskIndicators.js). */
 const isOverdue = (t) => deadlineInfo(t).state === "overdue";
 
@@ -891,12 +899,12 @@ function matchTask(t, f, brandsById) {
   if (f.status === "open" && t.status === "Tamamlandı") return false;
   if (f.status === "approval" && t.status !== "Yönetici Onayı" && t.status !== "Müşteri Onayı") return false;
   if (!["all", "open", "approval"].includes(f.status) && t.status !== f.status) return false;
-  if (f.assignee === "none" ? !!t.assigneeId : f.assignee !== "all" && t.assigneeId !== f.assignee) return false;
+  if (!matchPeople(t, f)) return false;
   if (f.platform !== "all" && t.platform !== f.platform) return false;
   if (!matchDate(t, f)) return false;
   const q = norm(f.search);
   if (q) {
-    const hay = norm([t.title, t.code, brandsById[t.brandId]?.name, USER_BY_ID[t.assigneeId]?.name, t.platform, t.format, t.status].join(" "));
+    const hay = norm([t.title, t.code, brandsById[t.brandId]?.name, USER_BY_ID[t.assigneeId]?.name, USER_BY_ID[t.reporterId]?.name, t.platform, t.format, t.status].join(" "));
     if (!hay.includes(q)) return false;
   }
   return true;
@@ -904,7 +912,7 @@ function matchTask(t, f, brandsById) {
 
 const SORT_OPTIONS = [
   ["due", "Bitiş Tarihi"], ["publish", "Başlama Tarihi"], ["priority", "Öncelik"], ["status", "Durum"], ["title", "Görev Adı"],
-  ["brand", "Marka"], ["assignee", "Sorumlu"], ["platform", "Platform"], ["comments", "Yorum Sayısı"], ["files", "Dosya Sayısı"],
+  ["brand", "Marka"], ["assignee", "Görevi Yapan"], ["reporter", "Görevi Veren"], ["platform", "Platform"], ["comments", "Yorum Sayısı"], ["files", "Dosya Sayısı"],
 ];
 
 function sortTasks(list, sort, ctx) {
@@ -918,6 +926,7 @@ function sortTasks(list, sort, ctx) {
       case "title": return norm(t.title);
       case "brand": return norm(ctx.brandsById[t.brandId]?.name);
       case "assignee": return norm(USER_BY_ID[t.assigneeId]?.name || "zzz");
+      case "reporter": return norm(USER_BY_ID[t.reporterId]?.name || "zzz");
       case "platform": return norm(t.platform);
       case "comments": return ctx.commentCount[t.id] || 0;
       case "files": return (ctx.attachmentsByTask[t.id] || EMPTY).length;
@@ -1202,10 +1211,29 @@ function StatusMenu({ value, onChange, small, options = STATUSES }) {
   );
 }
 
+/* Görevi Veren / Takipçi: yalnızca aktif adminler seçilebilir (veritabanı da 012 ile zorunlu kılar). */
+const adminUsers = () => USERS.filter((u) => u.role === "admin" && u.active !== false);
+function ReporterMenu({ value, onChange, compact }) {
+  return (
+    <SelectMenu
+      value={value || ""} onChange={onChange} title="Görevi Veren / Takipçi" width={230} ariaLabel="Görevi veren seç"
+      options={adminUsers().map((u) => ({ value: u.id, label: u.name }))}
+      renderOption={(o) => <><Avatar userId={o.value} size={20} /><span className="truncate">{o.label}</span></>}
+      triggerClassName="px-1 py-0.5 -mx-1 hover:bg-slate-100"
+      renderTrigger={(v) => (
+        <span className="inline-flex items-center gap-1.5 min-w-0">
+          {v ? <Avatar userId={v} size={compact ? 20 : 22} /> : null}
+          <span className={`truncate cw-12 ${v ? "text-slate-700 font-medium" : "text-slate-400"}`}>{USER_BY_ID[v]?.name || "Seçilmedi"}</span>
+        </span>
+      )}
+    />
+  );
+}
+
 function AssigneeMenu({ value, onChange, compact }) {
   return (
     <SelectMenu
-      value={value || ""} onChange={onChange} title="Sorumlu ata" width={230} ariaLabel="Sorumlu seç"
+      value={value || ""} onChange={onChange} title="Görevi Yapan" width={230} ariaLabel="Görevi yapan seç"
       options={[{ value: "", label: "Atanmamış" }, ...USERS.map((u) => ({ value: u.id, label: u.name }))]}
       renderOption={(o) => <><Avatar userId={o.value} size={20} /><span className="truncate">{o.label}</span></>}
       triggerClassName="px-1 py-0.5 -mx-1 hover:bg-slate-100"
@@ -1698,9 +1726,13 @@ function TopBar({ title, brand, filters, setFilter, onMenu, onNewTask, onBulk, s
             options={[["all", "Tüm Durumlar"], ["open", "Açık Görevler"], ["approval", "Onay Bekleyenler"], ...STATUSES.map((s) => [s, s])]}
           />
           {showAssigneeFilter && <FilterSelect
-            label="Sorumlu" value={filters.assignee} onChange={(v) => setFilter("assignee", v)}
-            options={[["all", "Tüm Sorumlular"], ["none", "Atanmamış"], ...USERS.map((u) => [u.id, u.name])]}
+            label="Görevi Yapan" value={filters.assignee} onChange={(v) => setFilter("assignee", v)}
+            options={[["all", "Tüm Görevi Yapanlar"], ["none", "Atanmamış"], ...USERS.filter((u) => u.role !== "client").map((u) => [u.id, u.name])]}
           />}
+          <FilterSelect
+            label="Görevi Veren" value={filters.reporter} onChange={(v) => setFilter("reporter", v)}
+            options={[["all", "Tüm Görevi Verenler"], ["none", "Takipçisiz"], ...adminUsers().map((u) => [u.id, u.name])]}
+          />
           <FilterSelect
             label="Platform" value={filters.platform} onChange={(v) => setFilter("platform", v)}
             options={[["all", "Tüm Platformlar"], ...PLATFORMS.map((p) => [p, p])]}
@@ -1985,7 +2017,7 @@ function DailyFeed({ brands, tasks, hasActiveFilters, onClear, onFocusBrand }) {
 /* ───────────────────────── İçerik tablosu ───────────────────────── */
 
 const COLUMNS = [
-  ["brand", "Marka", 170], ["title", "Görev", 290], ["platform", "Platform", 140], ["assignee", "Sorumlu", 170],
+  ["brand", "Marka", 170], ["title", "Görev", 290], ["platform", "Platform", 140], ["assignee", "Görevi Yapan", 170], ["reporter", "Görevi Veren", 170],
   ["status", "Durum", 160], ["priority", "Öncelik", 110], ["publish", "Başlama Tarihi", 135], ["due", "Bitiş Tarihi", 150],
   ["comments", "Yorum", 120], ["files", "Dosya", 76], [null, "", 80],
 ];
@@ -2029,7 +2061,7 @@ function TitleCell({ task }) {
 }
 
 function ContentTable({ tasks, sort, setSort, defaultBrandId, dueDefault, isVisible }) {
-  const { state, dispatch, updateTask, openTask, askDelete, attachmentsByTask, notify, can: allowed, statusOptions, brandsById } = useWS();
+  const { state, dispatch, updateTask, openTask, askDelete, attachmentsByTask, notify, can: allowed, statusOptions, brandsById, actor } = useWS();
   useNow();
   const canAssign = allowed("canAssignTasks"), canEdit = allowed("canEditContent");
   const [quickBrand, setQuickBrand] = useState(defaultBrandId);
@@ -2043,7 +2075,7 @@ function ContentTable({ tasks, sort, setSort, defaultBrandId, dueDefault, isVisi
     const title = quickTitle.trim();
     if (!title || !quickBrand) return;
     const now = new Date().toISOString();
-    const task = { id: uid(), code: null, brandId: quickBrand, title, platform: "Instagram", format: "Gönderi", assigneeId: "", status: "Başlanmadı", priority: "Orta", publishDate: dueDefault, dueDate: dueDefault, dueTime: "", description: "", createdAt: now, updatedAt: now };
+    const task = { id: uid(), code: null, brandId: quickBrand, title, platform: "Instagram", format: "Gönderi", assigneeId: "", reporterId: actor.role === "admin" ? actor.id : "", status: "Başlanmadı", priority: "Orta", publishDate: dueDefault, dueDate: dueDefault, dueTime: "", description: "", createdAt: now, updatedAt: now };
     if (!dispatch({ type: "ADD_TASK", task })) return;
     setQuickTitle("");
     notify(isVisible(task) ? "Görev eklendi." : "Görev eklendi ancak mevcut filtreler nedeniyle listede görünmüyor.", isVisible(task) ? "success" : "info");
@@ -2075,7 +2107,8 @@ function ContentTable({ tasks, sort, setSort, defaultBrandId, dueDefault, isVisi
                   <td className="px-3">{canAssign ? <BrandMenu value={t.brandId} onChange={(v) => updateTask(t.id, { brandId: v }, "Marka güncellendi.")} /> : <span className="inline-flex items-center gap-1.5 min-w-0"><BrandLogo brand={brandsById[t.brandId]} size={22} /><span className="truncate cw-12 font-medium text-slate-700">{brandsById[t.brandId]?.name}</span></span>}</td>
                   <td className="px-3"><TitleCell task={t} /></td>
                   <td className="px-3">{canEdit ? <PlatformMenu value={t.platform} onChange={(v) => updateTask(t.id, { platform: v }, "Platform güncellendi.")} /> : <PlatformChip platform={t.platform} />}</td>
-                  <td className="px-3">{canAssign ? <AssigneeMenu compact value={t.assigneeId} onChange={(v) => updateTask(t.id, { assigneeId: v }, "Sorumlu güncellendi.")} /> : <span className="inline-flex items-center gap-1.5 min-w-0"><Avatar userId={t.assigneeId} size={20} /><span className="truncate cw-12 text-slate-700">{USER_BY_ID[t.assigneeId]?.name || "Atanmamış"}</span></span>}</td>
+                  <td className="px-3">{canAssign ? <AssigneeMenu compact value={t.assigneeId} onChange={(v) => updateTask(t.id, { assigneeId: v }, "Görevi yapan güncellendi.")} /> : <span className="inline-flex items-center gap-1.5 min-w-0"><Avatar userId={t.assigneeId} size={20} /><span className="truncate cw-12 text-slate-700">{USER_BY_ID[t.assigneeId]?.name || "Atanmamış"}</span></span>}</td>
+                  <td className="px-3">{canAssign ? <ReporterMenu compact value={t.reporterId} onChange={(v) => updateTask(t.id, { reporterId: v }, "Görevi veren güncellendi.")} /> : <span className="inline-flex items-center gap-1.5 min-w-0">{t.reporterId ? <Avatar userId={t.reporterId} size={20} /> : null}<span className="truncate cw-12 text-slate-700">{USER_BY_ID[t.reporterId]?.name || "—"}</span></span>}</td>
                   <td className="px-3"><StatusMenu value={t.status} options={statusOptions(t)} onChange={(v) => updateTask(t.id, { status: v }, `Durum “${v}” olarak güncellendi.`)} /></td>
                   <td className="px-3">{canAssign ? <PriorityMenu value={t.priority} onChange={(v) => updateTask(t.id, { priority: v }, "Öncelik güncellendi.")} /> : <PriorityLabel priority={t.priority} />}</td>
                   <td className="px-2">{canEdit ? <DateInput value={t.publishDate} onChange={(v) => updateTask(t.id, { publishDate: v }, "Başlama tarihi güncellendi.")} /> : <span className="px-1.5 cw-12 text-slate-700">{fmtDate(t.publishDate)}</span>}</td>
@@ -2748,7 +2781,8 @@ function TaskDrawer({ task, focus, focusKey, onClose }) {
             <div className="space-y-0.5">
               <PropertyRow icon={Activity} label="Durum"><StatusMenu value={task.status} options={options} onChange={(v) => updateTask(task.id, { status: v }, `Durum “${v}” olarak güncellendi.`)} /></PropertyRow>
               <PropertyRow icon={Flag} label="Öncelik">{canAssign ? <PriorityMenu value={task.priority} onChange={(v) => updateTask(task.id, { priority: v }, "Öncelik güncellendi.")} /> : <PriorityLabel priority={task.priority} />}</PropertyRow>
-              <PropertyRow icon={Users} label="Sorumlu">{canAssign ? <AssigneeMenu value={task.assigneeId} onChange={(v) => updateTask(task.id, { assigneeId: v }, "Sorumlu güncellendi.")} /> : <span className="inline-flex items-center gap-1.5"><Avatar userId={task.assigneeId} size={22} /><span className="cw-12 font-medium text-slate-700">{USER_BY_ID[task.assigneeId]?.name || "Atanmamış"}</span></span>}</PropertyRow>
+              <PropertyRow icon={Users} label="Görevi Veren / Takipçi">{canAssign ? <ReporterMenu value={task.reporterId} onChange={(v) => updateTask(task.id, { reporterId: v }, "Görevi veren güncellendi.")} /> : <span className="inline-flex items-center gap-1.5">{task.reporterId ? <Avatar userId={task.reporterId} size={22} /> : null}<span className="cw-12 font-medium text-slate-700">{USER_BY_ID[task.reporterId]?.name || "Seçilmedi"}</span></span>}</PropertyRow>
+              <PropertyRow icon={Users} label="Görevi Yapan">{canAssign ? <AssigneeMenu value={task.assigneeId} onChange={(v) => updateTask(task.id, { assigneeId: v }, "Görevi yapan güncellendi.")} /> : <span className="inline-flex items-center gap-1.5"><Avatar userId={task.assigneeId} size={22} /><span className="cw-12 font-medium text-slate-700">{USER_BY_ID[task.assigneeId]?.name || "Atanmamış"}</span></span>}</PropertyRow>
               <PropertyRow icon={Layers} label="Marka">{canAssign ? <BrandMenu value={task.brandId} onChange={(v) => updateTask(task.id, { brandId: v }, "Marka güncellendi.")} /> : <span className="inline-flex items-center gap-1.5"><BrandLogo brand={brand} size={22} /><span className="cw-12 font-medium text-slate-700">{brand?.name}</span></span>}</PropertyRow>
               <PropertyRow icon={LayoutGrid} label="Platform">{canEdit ? <PlatformMenu value={task.platform} onChange={(v) => updateTask(task.id, { platform: v }, "Platform güncellendi.")} /> : <PlatformChip platform={task.platform} />}</PropertyRow>
               <PropertyRow icon={Type} label="Görev Türü">{canEdit ? <FormatMenu value={task.format} onChange={(v) => updateTask(task.id, { format: v }, "Görev türü güncellendi.")} /> : <span className="cw-12 text-slate-700">{task.format}</span>}</PropertyRow>
@@ -2847,9 +2881,9 @@ function Field({ label, error, children, full, group }) {
 const inputCls = (err) => `h-9 w-full rounded-lg border px-3 cw-13 outline-none bg-white focus:ring-2 ${err ? "border-red-300 focus:ring-red-100" : "border-slate-200 focus:border-orange-400 focus:ring-orange-100"}`;
 
 function NewTaskModal({ presetBrandId, defaultDate, onClose, onCreated }) {
-  const { state } = useWS();
+  const { state, actor } = useWS();
   const [form, setForm] = useState({
-    title: "", brandId: presetBrandId || state.brands[0]?.id || "", platform: SOCIAL_PLATFORMS[0], format: SOCIAL_TASK_TYPE, assigneeId: "",
+    title: "", brandId: presetBrandId || state.brands[0]?.id || "", platform: SOCIAL_PLATFORMS[0], format: SOCIAL_TASK_TYPE, assigneeId: "", reporterId: actor?.role === "admin" ? actor.id : "",
     status: "Başlanmadı", priority: "Orta", publishDate: defaultDate, dueDate: defaultDate, dueTime: "", description: "",
   });
   const [errors, setErrors] = useState({});
@@ -2861,12 +2895,14 @@ function NewTaskModal({ presetBrandId, defaultDate, onClose, onCreated }) {
     if (!form.title.trim()) next.title = "Görev başlığı zorunludur.";
     if (!form.brandId) next.brandId = "Bir marka seçin.";
     if (!form.dueDate) next.dueDate = "Bitiş tarihi seçin.";
+    if (!form.assigneeId) next.assigneeId = "Görevi yapacak kişiyi seçin.";
+    if (!form.reporterId) next.reporterId = "Görevi veren / takip eden yöneticiyi seçin.";
     setErrors(next);
     if (Object.keys(next).length) return;
     const now = new Date().toISOString();
     onCreated({
       id: uid(), code: null, brandId: form.brandId, title: form.title.trim(), platform: isSocial ? form.platform : "", format: form.format,
-      assigneeId: form.assigneeId, status: form.status, priority: form.priority, publishDate: form.publishDate || form.dueDate, dueDate: form.dueDate, dueTime: normalizeTime(form.dueTime),
+      assigneeId: form.assigneeId, reporterId: form.reporterId, status: form.status, priority: form.priority, publishDate: form.publishDate || form.dueDate, dueDate: form.dueDate, dueTime: normalizeTime(form.dueTime),
       description: form.description.trim() ? form.description.trim().split(/\n{2,}/).map((p) => `<p>${escHtml(p).replace(/\n/g, "<br>")}</p>`).join("") : "",
       createdAt: now, updatedAt: now,
     });
@@ -2883,10 +2919,16 @@ function NewTaskModal({ presetBrandId, defaultDate, onClose, onCreated }) {
             {state.brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
         </Field>
-        <Field label="Sorumlu">
-          <select value={form.assigneeId} onChange={(e) => set("assigneeId", e.target.value)} className={inputCls()}>
-            <option value="">Atanmamış</option>
-            {USERS.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+        <Field label="Görevi Yapan" error={errors.assigneeId}>
+          <select value={form.assigneeId} onChange={(e) => set("assigneeId", e.target.value)} aria-label="Görevi Yapan" aria-required="true" className={inputCls(errors.assigneeId)}>
+            <option value="">Seçin…</option>
+            {USERS.filter((u) => u.role !== "client" && u.active !== false).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Görevi Veren / Takipçi" error={errors.reporterId}>
+          <select value={form.reporterId} onChange={(e) => set("reporterId", e.target.value)} aria-label="Görevi Veren / Takipçi" aria-required="true" className={inputCls(errors.reporterId)}>
+            <option value="">Seçin…</option>
+            {adminUsers().map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
         </Field>
         <Field label="Görev Türü">
@@ -3462,7 +3504,7 @@ function BulkTaskSheet({ draftScope, createTasks, onClose }) {
     savingRef.current = true; setSaving(true);
     const now = new Date().toISOString();
     try {
-      const tasks = pending.map((r) => bulkToTask(r, now));
+      const tasks = pending.map((r) => ({ ...bulkToTask(r, now), reporterId: actor.role === "admin" ? actor.id : "" })); // Görevi Veren: ekleyen admin
       const res = await createTasks(tasks);
       const savedIds = new Set(pending.map((r) => r.id));
       send({ type: "reset", rows: (rs) => rowsAfterSave(rs, savedIds, res, now) });
@@ -4009,6 +4051,30 @@ function RoleSwitcher({ actor, realUserId, onChange, previewOnly, directory }) {
   );
 }
 
+/* Telefon / tarayıcı bildirim izni. Girişte izin istenir (Chrome); dokunuş gerektiren cihazlarda (iPhone) düğme gösterilir.
+   İzin verilmişse her girişte abonelik bu kullanıcıya bağlanır. */
+const PUSH_DISMISS_KEY = "cw:push-dismissed";
+function PushPrompt({ push }) {
+  const [permission, setPermission] = useState(() => (push ? push.permission() : "unsupported"));
+  const [hidden, setHidden] = useState(() => { try { return window.localStorage.getItem(PUSH_DISMISS_KEY) === "1"; } catch { return false; } });
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!push) return;
+    push.enable(push.permission() === "default").then(setPermission, () => setPermission(push.permission()));
+  }, [push]);
+  if (!push || hidden || permission !== "default") return null;
+  const enable = () => { setBusy(true); push.enable(true).then(setPermission, () => setPermission(push.permission())).finally(() => setBusy(false)); };
+  const later = () => { setHidden(true); try { window.localStorage.setItem(PUSH_DISMISS_KEY, "1"); } catch { /* depolama kapalı */ } };
+  return (
+    <div className="shrink-0 flex flex-wrap items-center gap-2 px-4 lg:px-6 py-2 bg-sky-50 border-b border-sky-200 cw-12 text-sky-900" data-push-prompt="">
+      <Bell size={14} className="shrink-0" />
+      <span className="flex-1 min-w-0">Görev ve onay bildirimlerini bu cihazda da almak için bildirimleri açın.</span>
+      <button type="button" onClick={enable} disabled={busy} className="h-7 px-2.5 rounded-md bg-sky-600 text-white font-semibold hover:bg-sky-700 disabled:opacity-60">Bildirimleri Aç</button>
+      <button type="button" onClick={later} className="h-7 px-2 rounded-md font-medium hover:bg-sky-100">Daha sonra</button>
+    </div>
+  );
+}
+
 function PreviewBanner({ actor, onExit, readOnly }) {
   return (
     <div className="shrink-0 flex flex-wrap items-center gap-2 px-4 lg:px-6 py-2 bg-amber-50 border-b border-amber-200 cw-12 text-amber-900">
@@ -4490,7 +4556,15 @@ function SocialPlanPage({ search, brandId }) {
   const [planBrand, setPlanBrand] = useState(brandId !== "all" ? brandId : null);
   useEffect(() => { if (brandId !== "all") setPlanBrand(brandId); }, [brandId]);
   const q = norm(search);
-  const tasks = useMemo(() => state.tasks.filter((t) => planDate(t) && matchesSearch(q, t.title, brandsById[t.brandId]?.name, t.platform, t.format)), [state.tasks, q, brandsById]);
+  const [people, setPeople] = useState({ assignee: "all", reporter: "all" }); // Görevi Yapan / Görevi Veren süzgeçleri
+  const tasks = useMemo(() => state.tasks.filter((t) => planDate(t) && matchPeople(t, people) && matchesSearch(q, t.title, brandsById[t.brandId]?.name, t.platform, t.format)), [state.tasks, q, brandsById, people]);
+  const personSelect = (key, label, all, users) => (
+    <select value={people[key]} onChange={(e) => setPeople((p) => ({ ...p, [key]: e.target.value }))} aria-label={label} title={label} data-plan-person={key}
+      className={`h-8 max-w-[11rem] rounded-lg border px-2 cw-12 font-medium outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100 ${people[key] !== "all" ? "border-orange-300 bg-orange-50 text-orange-800" : "border-slate-200 bg-white text-slate-700"}`}>
+      <option value="all">{all}</option>
+      {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+    </select>
+  );
   const brands = state.brands;
   const visibleBrands = view === "month" || brandId === "all" ? brands : brands.filter((b) => b.id === brandId);
   const step = (n) => setCursor((c) => (view === "day" ? addDays(c, n) : view === "week" ? addDays(c, 7 * n) : shiftMonth(c, n)));
@@ -4510,7 +4584,9 @@ function SocialPlanPage({ search, brandId }) {
             <p className="cw-11 text-slate-500 leading-tight">{sub}</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {personSelect("assignee", "Görevi Yapan", "Tüm Görevi Yapanlar", state.users.filter((u) => u.role !== "client" && u.active !== false))}
+          {personSelect("reporter", "Görevi Veren", "Tüm Görevi Verenler", state.users.filter((u) => u.role === "admin" && u.active !== false))}
           <div className="inline-flex p-1 gap-0.5 rounded-lg bg-slate-100" role="tablist" aria-label="Plan görünümü">
             {PLAN_VIEWS.map(([key, label, Icon]) => (
               <button key={key} type="button" role="tab" aria-selected={view === key} onClick={() => setView(key)} data-plan-view={key}
@@ -7332,7 +7408,7 @@ const SEARCH_PLACEHOLDERS = {
   users: "Kullanıcı veya e-posta ara…", agreement: "Kullanıcı ara…", notifications: "Bildirimlerde ara…", "client-home": "İçeriklerimde ara…", content: "İçeriklerimde ara…", pending: "Onay bekleyenlerde ara…", "client-files": "Görev, marka veya kişi ara…", "client-kit": "İçeriklerimde ara…", "client-history": "Onay geçmişinde ara…",
 };
 
-function Workspace({ state, dispatch, getState, createTasks, draftScope, contentApi, accountApi, agreementApi, userApi, portalSlug, portalKey, actorId, realUserId, onViewAs, allowImpersonation, onSignOut, syncError, denied, media, brandKit, checklistApi }) {
+function Workspace({ state, dispatch, getState, createTasks, draftScope, contentApi, accountApi, agreementApi, userApi, portalSlug, portalKey, actorId, realUserId, onViewAs, allowImpersonation, push = null, onSignOut, syncError, denied, media, brandKit, checklistApi }) {
   const actor = state.users.find((u) => u.id === actorId) || state.users.find((u) => u.id === realUserId);
   const realUser = state.users.find((u) => u.id === realUserId);
   setDirectory(state.users, actor.id);
@@ -7599,7 +7675,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
     pageNode = (
       <>
         {role === "admin"
-          ? <OpsDesk tasks={scopedTasks} open={overviewOpen} onToggle={() => setOverviewOpen((o) => !o)} />
+          ? <OpsDesk tasks={scopedTasks.filter((t) => matchPeople(t, filters))} open={overviewOpen} onToggle={() => setOverviewOpen((o) => !o)} />
           : <Overview tasks={scopedTasks} open={overviewOpen} onToggle={() => setOverviewOpen((o) => !o)} filters={filters} onApply={(k, v) => { setFilter(k, v); if (tab === "files") setTab("feed"); }} />}
         <section ref={workspaceRef} className="space-y-4" aria-label="Çalışma alanı">
           <WorkspaceTabs tabs={tabs} tab={tab} setTab={setTab} sort={sort} setSort={setSort} counts={{ feed: filteredTasks.length, table: filteredTasks.length, files: scopedAssets }} />
@@ -7657,6 +7733,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
 
         <div className="flex-1 min-w-0 flex flex-col">
           {impersonating && <PreviewBanner actor={actor} readOnly={!allowImpersonation} onExit={() => onViewAs(realUserId)} />}
+          {!impersonating && <PushPrompt push={push} />}
           <TopBar
             title={bulkOpen ? "Toplu Görev Ekle" : title}
             brand={currentPage === "ops" && !bulkOpen ? selectedBrand : null}
@@ -8278,7 +8355,7 @@ export default function App({ source = demoSource }) {
   return (
     <Workspace
       state={state} dispatch={dispatch} getState={getState} createTasks={createTasks} draftScope={source.draftScope || null} actorId={viewAsId} realUserId={realUserId} onViewAs={viewAs}
-      allowImpersonation={!!source.allowImpersonation} onSignOut={signOut} syncError={syncError} denied={denied} media={source.media || null} brandKit={brandKit}
+      allowImpersonation={!!source.allowImpersonation} push={source.push || null} onSignOut={signOut} syncError={syncError} denied={denied} media={source.media || null} brandKit={brandKit}
       checklistApi={source.checklist || null} contentApi={source.content || null} accountApi={source.account || null} agreementApi={agreementApi} userApi={userApi}
       portalSlug={actor?.role === "client" ? route.portal : staffFocus?.slug ?? null} portalKey={actor?.role === "client" ? loc : staffFocus?.n}
     />

@@ -82,3 +82,29 @@ self.addEventListener("fetch", (event) => {
   }
   // Diğer her şey (geliştirme modülleri, sw.js, .htaccess vb.): tarayıcının normal davranışı.
 });
+
+/* Push bildirimi (send-push Edge Function'ı gönderir): { title, body, url, tag } */
+self.addEventListener("push", (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch { data = { body: event.data ? event.data.text() : "" }; }
+  event.waitUntil(self.registration.showNotification(data.title || "AgencyOS", {
+    body: data.body || "Yeni bildiriminiz var.",
+    icon: at("icons/icon-192.png"),
+    badge: at("icons/favicon-32.png"),
+    tag: data.tag || undefined,
+    renotify: !!data.tag,
+    data: { url: at((data.url || "/dashboard").replace(/^\//, "")) },
+  }));
+});
+
+/* Bildirime tıklanınca: panel açıksa o pencere öne gelir ve adrese gider, değilse yeni pencere açılır. */
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = event.notification.data?.url || SHELL;
+  event.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const win = wins.find((w) => new URL(w.url).origin === new URL(target).origin);
+    if (win) { await win.focus(); if ("navigate" in win && win.url !== target) await win.navigate(target).catch(() => {}); return; }
+    await self.clients.openWindow(target);
+  })());
+});

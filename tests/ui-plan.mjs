@@ -31,6 +31,19 @@ try {
   await page(`$("button[aria-label='Detayı kapat']")?.click(); return true;`);
   await sleep(300);
 
+  /* Görevi Yapan / Görevi Veren süzgeçleri: liste ve Genel Bakış kutuları birlikte daralır */
+  const resultCount = () => page(`const m = document.querySelector("header").textContent.match(/([0-9]+) görev/); return m ? +m[1] : -1;`);
+  const sumBoxes = () => page(`return $$("[data-ops-box]").reduce((n, b) => n + +b.querySelector("[data-ops-count]").dataset.opsCount, 0);`);
+  const cards0 = await resultCount(), boxes0 = await sumBoxes();
+  const opts = await page(`const s = $("select[aria-label='Görevi Veren']"); return s ? [...s.options].map((o) => o.value) : null;`);
+  await page(`setValue($("select[aria-label='Görevi Veren']"), "u1"); return true;`); await sleep(300);
+  const cards1 = await resultCount(), boxes1 = await sumBoxes();
+  await page(`setValue($("select[aria-label='Görevi Yapan']"), "u2"); return true;`); await sleep(300);
+  const cards2 = await resultCount();
+  check("Görevi Veren süzgeci (yalnızca adminler) listeyi ve Genel Bakış kutularını daraltır; Görevi Yapan ile birlikte çalışır",
+    JSON.stringify(opts) === JSON.stringify(["all", "none", "u1"]) && cards0 > 0 && cards1 > 0 && cards1 < cards0 && boxes1 < boxes0 && cards2 <= cards1, JSON.stringify({ opts, cards0, cards1, cards2, boxes0, boxes1 }));
+  await page(`setValue($("select[aria-label='Görevi Veren']"), "all"); setValue($("select[aria-label='Görevi Yapan']"), "all"); return true;`); await sleep(300);
+
   /* Logo: marka seçimi ve arama sıfırlanır, ana görünüm tüm markalarla açılır */
   const cardCount = () => page(`return $$("[data-brand-card]").length;`);
   const allCards = await cardCount();

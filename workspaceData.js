@@ -28,6 +28,7 @@
  * İki uygulama var: createMemorySource (demo, kalıcı değil) ve createSupabaseSource (canlı).
  */
 
+import { disablePush, enablePush, pushPermission } from "./push.js";
 import { createSupabaseBrandKit } from "./brandKit.js";
 import { signedInWithEmailLink } from "./passwords.js";
 import { rowToAgreementText } from "./agreement.js";
@@ -200,11 +201,11 @@ function emulateChecklistServer(api, action, prev, next, merge, actorId) {
 
 /* Uygulama alanı → veritabanı sütunu. Boş string tarih/sorumlu değerleri null olarak yazılır. */
 const TASK_COLUMNS = {
-  brandId: "brand_id", title: "title", platform: "platform", format: "format", assigneeId: "assignee_id",
+  brandId: "brand_id", title: "title", platform: "platform", format: "format", assigneeId: "assignee_id", reporterId: "reporter_id",
   status: "status", priority: "priority", publishDate: "publish_date", dueDate: "due_date", dueTime: "due_time",
   description: "description", createdAt: "created_at", updatedAt: "updated_at", checklistDisabled: "checklist_disabled",
 };
-const NULLABLE = new Set(["assignee_id", "publish_date", "due_date", "due_time", "platform"]); // platform: 011 sonrası boş olabilir
+const NULLABLE = new Set(["assignee_id", "reporter_id", "publish_date", "due_date", "due_time", "platform"]); // platform: 011 sonrası boş olabilir
 const ASSET_COLUMNS = {
   brandId: "brand_id", folderId: "folder_id", name: "name", type: "type", thumbnail: "thumbnail_url",
   driveFileId: "drive_file_id", driveUrl: "drive_url", size: "size_label", owner: "owner_id",
@@ -223,12 +224,15 @@ function toColumns(obj, map) {
 
 const rowToTask = (r) => ({
   id: r.id, code: taskCode(r.task_no), brandId: r.brand_id, title: r.title, platform: r.platform || "", format: r.format,
-  assigneeId: r.assignee_id || "", status: r.status, priority: r.priority, publishDate: r.publish_date || "", dueDate: r.due_date || "",
+  assigneeId: r.assignee_id || "", reporterId: r.reporter_id || "", status: r.status, priority: r.priority, publishDate: r.publish_date || "", dueDate: r.due_date || "",
   dueTime: r.due_time ? String(r.due_time).slice(0, 5) : "",
   description: r.description || "", createdAt: r.created_at, updatedAt: r.updated_at, checklistDisabled: r.checklist_disabled === true,
 });
+/* 012 çalıştırılmamışsa (tasks.reporter_id yok) Görevi Veren yazılmaz; görev kaydı yine çalışır. load() denetler. */
+let reporterColumn = true;
+const withoutMissing = (row) => { if (!reporterColumn) delete row.reporter_id; return row; };
 const taskToRow = (t) => {
-  const row = { id: t.id, ...toColumns(t, TASK_COLUMNS) };
+  const row = withoutMissing({ id: t.id, ...toColumns(t, TASK_COLUMNS) });
   if (!row.checklist_disabled) delete row.checklist_disabled; // varsayılan değer; 006 öncesi şemayla da uyumlu
   return row;
 };
@@ -322,7 +326,7 @@ const CHECKLIST_LIVE_TABLES = {
 };
 const rowKey = (table, r) => (table === "brand_members" ? membershipId(r.brand_id, r.user_id) : r.id);
 
-export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, storage = {}, callback = null } = {}) {
+export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, storage = {}, callback = null, vapidKey = "" } = {}) {
   /* E-posta bağlantısı dönüşü (authCallback.js). #access_token ile gelen davet / sıfırlama oturumunu supabase-js kurar;
      ilk yüklemede bu kullanıcı "şifresini belirlemeli" olarak işaretlenir. ?token_hash ile geleni completeCallback doğrular. */
   let markOnLoad = !!(callback && callback.hasSession && !callback.tokenHash && !callback.error && PASSWORD_TYPES.includes(callback.type));
@@ -389,7 +393,12 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
   const insertNotifications = async (entries) => {
     if (!entries.length) return;
     const { error } = await supabase.from("notifications").insert(entries.map(notificationToRow));
-    if (error) console.warn("Bildirim gönderilemedi:", error.message);
+    if (error) { console.warn("Bildirim gönderilemedi:", error.message); return; }
+    // Telefon / tarayıcı bildirimi (send-push Edge Function). Başarısız olursa uygulama içi bildirim yine durur.
+    if (vapidKey) {
+      supabase.functions.invoke("send-push", { body: { ids: entries.map((n) => n.id) } })
+        .then(({ error: pushError }) => { if (pushError) console.warn("Push bildirimi gönderilemedi:", pushError.message); }, () => {});
+    }
   };
 
   /* Marka üyeliklerindeki farkı (eklenen/çıkarılan) veritabanına yansıtır. */
@@ -457,7 +466,7 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
         break;
       }
       case "UPDATE_TASK": {
-        const row = toColumns(action.patch, TASK_COLUMNS);
+        const row = withoutMissing(toColumns(action.patch, TASK_COLUMNS));
         delete row.updated_at; // veritabanı tetikleyicisi ayarlar
         if (Object.keys(row).length) {
           touch("tasks", action.id);
@@ -757,8 +766,14 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
       },
       // E-postayla giriş bağlantısı (magic link) KAPALI: her kullanıcı yöneticinin belirlediği kendi şifresiyle girer;
       // panel hiçbir e-posta göndermez (SMTP gerekmez). sendLink tanımlı olmadığı için giriş ekranında bu seçenek görünmez.
-      signOut: async () => { await flushDescriptions(); must(await supabase.auth.signOut()); },
+      signOut: async () => { await flushDescriptions(); await disablePush(supabase).catch(() => {}); must(await supabase.auth.signOut()); },
     },
+
+    /* Telefon / tarayıcı bildirimleri (push.js). VITE_VAPID_PUBLIC_KEY tanımlı değilse kapalı. */
+    push: vapidKey ? {
+      permission: pushPermission,
+      enable: (ask = false) => enablePush(supabase, vapidKey, { ask }),
+    } : null,
 
     /* İlk girişte zorunlu sözleşme onayı: yalnızca oturumdaki kullanıcının kendi kaydı, sunucu fonksiyonuyla (009). */
     agreement: {
@@ -808,6 +823,8 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
       const optional = (p) => p.catch((err) => { if (isMissingRelation(err)) return null; throw err; });
       const agreementRow = supabase.from("agreement_text").select("*").maybeSingle()
         .then(({ data, error }) => { if (error) throw error; return data; });
+      // 012 (Görevi Veren) çalıştırıldı mı? Sütun yoksa panel onsuz çalışır.
+      { const { error: reporterError } = await supabase.from("tasks").select("reporter_id").limit(1); reporterColumn = !reporterError; }
       const [profiles, brands, members, tasks, comments, attachments, assets, activity, approvals, notifications, checklists, checklistItems, versions, contentAssets, requests, agreementTextRow] = await Promise.all([
         selectAll("profiles", "full_name"),
         selectAll("brands", "created_at"),

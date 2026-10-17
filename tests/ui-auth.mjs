@@ -57,6 +57,10 @@ try {
   await login("admin@demo.test", "Demo1234");
   await waitFor(() => page(`return location.pathname === "/dashboard" && $("main").textContent.includes("İçeriklerin iç onaydan");`), 8000).catch(() => {});
   check("Senaryo 3: admin /dashboard'a gider; saklanan marka bağlantısı ajans onay ekranını açar", (await path()) === "/dashboard?authdemo" && await page(`const m = $("main").textContent; return m.includes("Kira artış oranı") && !m.includes("Makarna çeşitleri");`), await path());
+  await page(`$$("aside button").find((b) => b.textContent.includes("Ekip & Marka Yönetimi"))?.click(); return true;`);
+  await sleep(500);
+  check("İzin listesinde olmayan admin başka hesaba geçemez: rol değiştirici ve 'Portalı Görüntüle' yok",
+    await page(`return !$("select[aria-label='Rol']") && !$("select[aria-label='Görüntülenen kullanıcı']") && !$("button[aria-label='Portalı Görüntüle'], button[title='Portalı Görüntüle']") && $$("aside button").some((b) => b.textContent.includes("Ekip & Marka Yönetimi"));`));
   await logout();
   await waitFor(() => page(`return location.pathname === "/login";`), 5000).catch(() => {});
 

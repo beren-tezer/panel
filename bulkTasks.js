@@ -16,8 +16,7 @@ export const BULK_COLUMNS = [
   { key: "title", label: "Görev Başlığı", type: "text", field: "title", width: 320 },
   { key: "platform", label: "Platform", type: "option", field: "platform", width: 150 },
   { key: "format", label: "Görev Türü", type: "option", field: "format", width: 130 },
-  { key: "dueDate", label: "Teslim Tarihi", type: "date", field: "dueDate", width: 160 },
-  { key: "dueTime", label: "Teslim Saati", type: "time", field: "dueTime", width: 120 },
+  { key: "dueDate", label: "Bitiş Tarihi", type: "date", field: "dueDate", width: 160 },
   { key: "assignee", label: "Atanan Kişi", type: "user", field: "assigneeId", width: 190 },
 ];
 export const COLUMN_KEYS = BULK_COLUMNS.map((c) => c.key);
@@ -178,7 +177,7 @@ export function cellText(row, key, ctx) {
 
 const LABEL_ERRORS = {
   brand: (v) => `Marka bulunamadı: “${v}”.`, assignee: (v) => `Ekip üyesi bulunamadı: “${v}”.`, format: (v) => `Görev türü tanınmadı: “${v}”.`,
-  platform: (v) => `Platform tanınmadı: “${v}”.`, dueDate: (v) => `Teslim tarihi okunamadı: “${v}” (örn. 12.11.2026).`, dueTime: (v) => `Teslim saati okunamadı: “${v}” (örn. 16:30).`,
+  platform: (v) => `Platform tanınmadı: “${v}”.`, dueDate: (v) => `Bitiş tarihi okunamadı: “${v}” (örn. 12.11.2026).`, dueTime: (v) => `Teslim saati okunamadı: “${v}” (örn. 16:30).`,
 };
 
 /* { sütun: mesaj }. Tamamen boş ve kaydedilmiş satırlar doğrulanmaz.
@@ -194,7 +193,7 @@ export function validateRow(row, ctx) {
   if (!row.title.trim()) e.title = "Görev başlığı boş bırakılamaz.";
   if (!e.platform && !BULK_PLATFORMS.includes(row.platform)) e.platform = "Platform seçilmedi.";
   if (!e.format && !BULK_FORMATS.includes(row.format)) e.format = "Görev türü seçilmedi.";
-  if (!e.dueDate && !row.dueDate) e.dueDate = "Teslim tarihi girilmedi.";
+  if (!e.dueDate && !row.dueDate) e.dueDate = "Bitiş tarihi girilmedi.";
   if (!e.assignee && row.assigneeId && !ctx.users.some((u) => u.id === row.assigneeId)) e.assignee = "Bu kişiye görev atanamaz.";
   return e;
 }
@@ -221,7 +220,7 @@ export function validateSheet(rows, ctx) {
 export function toTask(row, now = new Date().toISOString()) {
   return {
     id: row.taskId, code: null, brandId: row.brandId, title: row.title.trim(), platform: row.platform, format: row.format,
-    assigneeId: row.assigneeId || "", status: "Başlanmadı", priority: "Orta", publishDate: row.dueDate, dueDate: row.dueDate, dueTime: row.dueTime || "",
+    assigneeId: row.assigneeId || "", status: "Başlanmadı", priority: "Orta", publishDate: row.dueDate, dueDate: row.dueDate, dueTime: "", // saat seçimi yok: gün sonu
     description: "", createdAt: now, updatedAt: now,
   };
 }
@@ -276,7 +275,7 @@ const HEADER_ALIASES = {
   title: ["gorev basligi", "gorev", "baslik", "icerik", "task", "title", "is"],
   platform: ["platform", "kanal", "channel"],
   format: ["gorev turu", "format", "tur", "icerik turu", "type"],
-  dueDate: ["teslim tarihi", "son teslim", "tarih", "teslim", "deadline", "due date", "due", "date"],
+  dueDate: ["bitis tarihi", "bitis", "teslim tarihi", "son teslim", "tarih", "teslim", "deadline", "due date", "due", "date"],
   dueTime: ["teslim saati", "saat", "time", "due time"],
   assignee: ["atanan kisi", "atanan", "sorumlu", "kisi", "ekip uyesi", "assignee", "owner"],
 };
@@ -307,7 +306,7 @@ export function applyPaste(rows, anchor, matrix, ctx, { carry = false } = {}) {
       out.push(newRow(carry ? carryFrom(out[out.length - 1]) : null)); added++;
     }
     let row = out[r];
-    header.forEach((key, j) => { if (key && j < cells.length) row = setCell(row, key, cells[j], ctx); });
+    header.forEach((key, j) => { if (key && COLUMN_KEYS.includes(key) && j < cells.length) row = setCell(row, key, cells[j], ctx); });
     out[r] = row; changed++; r++;
   }
   return { rows: out, changed, added, from, to: r - 1, truncated };

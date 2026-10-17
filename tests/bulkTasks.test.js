@@ -82,14 +82,12 @@ test("doğrulama: boş satırlar atlanır, eksikler satır numarasıyla bildiril
   const noTitle = { ...newRow(), brandId: "b1", dueDate: "2026-10-12" };
   const empty = newRow({ brandId: "b1" });
   const foreign = { ...newRow(), brandId: "bX", title: "x", dueDate: "2026-10-12", assigneeId: "c1" };
-  const badTime = setCell({ ...ok, id: "t" }, "dueTime", "99:99", ctx);
-  const v = validateSheet([ok, empty, noTitle, foreign, badTime], ctx);
-  assert.deepEqual([v.total, v.ready, v.invalid, v.empty, v.saved], [5, 1, 3, 1, 0]);
-  assert.ok(v.messages.some((m) => m.text === "3. satır: Teslim tarihi girilmedi." || m.text === "3. satır: Görev başlığı boş bırakılamaz."));
+  const v = validateSheet([ok, empty, noTitle, foreign], ctx);
+  assert.deepEqual([v.total, v.ready, v.invalid, v.empty, v.saved], [4, 1, 2, 1, 0]);
+  assert.ok(v.messages.some((m) => m.text === "3. satır: Bitiş tarihi girilmedi." || m.text === "3. satır: Görev başlığı boş bırakılamaz."));
   assert.equal(v.messages.find((m) => m.rowId === noTitle.id && m.col === "title").text, "3. satır: Görev başlığı boş bırakılamaz.");
   assert.equal(v.errors[foreign.id].brand, "Bu markaya görev ekleme yetkiniz yok.");
   assert.equal(v.errors[foreign.id].assignee, "Bu kişiye görev atanamaz.");
-  assert.match(v.errors[badTime.id].dueTime, /okunamadı/);
   assert.equal(validateSheet([{ ...ok, saved: { code: "CW-1" } }], ctx).saved, 1);
 });
 
@@ -117,7 +115,7 @@ test("Excel'den 20 satır yapıştırma: satırlar oluşur, eşleşmeyenler işa
   assert.equal(v.invalid, 3);
   assert.equal(res.rows[0].format, "Reels");
   assert.equal(res.rows[2].format, "Gönderi");
-  assert.equal(res.rows[0].dueTime, "16:30");
+  assert.equal(res.rows[0].dueTime, ""); // saat sütunu tanınır ama yok sayılır (saat seçimi kaldırıldı)
   assert.equal(res.rows[0].assigneeId, "u2");
   assert.match(v.errors[res.rows[6].id].brand, /Olmayan Marka/);
   assert.match(v.errors[res.rows[8].id].dueDate, /32\.13\.2026/);
@@ -136,7 +134,7 @@ test("görev modeline dönüştürme mevcut alanlarla eşleşir", () => {
   const row = { ...newRow(), brandId: "b1", title: "  Başlık ", format: "Reels", platform: "Instagram", dueDate: "2026-10-12", dueTime: "16:30", assigneeId: "u2" };
   const t = toTask(row, "2026-10-10T10:00:00.000Z");
   assert.equal(t.id, row.taskId);
-  assert.deepEqual([t.title, t.status, t.priority, t.publishDate, t.dueDate, t.dueTime, t.assigneeId], ["Başlık", "Başlanmadı", "Orta", "2026-10-12", "2026-10-12", "16:30", "u2"]);
+  assert.deepEqual([t.title, t.status, t.priority, t.publishDate, t.dueDate, t.dueTime, t.assigneeId], ["Başlık", "Başlanmadı", "Orta", "2026-10-12", "2026-10-12", "", "u2"]);
 });
 
 test("taslak: kullanıcı ve çalışma alanı bazında, kaydedilenler ve boşlar saklanmaz", () => {

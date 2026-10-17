@@ -46,7 +46,7 @@ try {
   await openSheet();
   const head = await page(`return { cols: $$("[data-bulk-grid] thead th").map((t) => t.textContent.trim()), rows: $$("[data-sheet-row]").length, sidebar: !!$("aside nav, aside button"), title: document.body.textContent.includes("Toplu Görev Ekle") };`);
   check("Spreadsheet açılır: sütunlar, 5 başlangıç satırı, sidebar korunur",
-    head.cols.join("|") === "Sıra|Marka|Görev Başlığı|Platform|Görev Türü|Teslim Tarihi|Teslim Saati|Atanan Kişi|İşlemler" && head.rows === 5 && head.sidebar, JSON.stringify(head));
+    head.cols.join("|") === "Sıra|Marka|Görev Başlığı|Platform|Görev Türü|Bitiş Tarihi|Atanan Kişi|İşlemler" && head.rows === 5 && head.sidebar, JSON.stringify(head));
 
   /* 2. Yeni satır */
   await page(`exact("button", "Yeni Satır").click();`);
@@ -88,17 +88,16 @@ try {
   await press("Enter");
   check("Marka listesi mevcut markaları getirir ve aranır", brandOpts.length === 7 && filtered.length === 1 && filtered[0].includes("Sofra Pide") && (await cell(0, 0)) === "Sofra Pide" && (await active()) === "1:0",
     `${brandOpts.length} / ${filtered.join(",")} / ${await cell(0, 0)}`);
-  await clickCell(0, 6); await press("Enter", {}); // Enter: aşağı
-  await clickCell(0, 6); await press("F2");
+  await clickCell(0, 5); await press("Enter", {}); // Enter: aşağı
+  await clickCell(0, 5); await press("F2");
   await waitFor(() => page(`return !!$("[role='listbox'][aria-label='Atanan Kişi']");`), 2000);
   const people = await page(`return $$("[role='listbox'][aria-label='Atanan Kişi'] [role='option']").map((o) => o.textContent);`);
   check("Ekip üyesi listesi: atanabilir kişiler (müşteriler yok) + Atanmamış", people.length === 7 && people[0].includes("Atanmamış") && !people.some((p) => /Deniz Aydın|Mert Kaya|Zeynep Erdem/.test(p)), people.join(", "));
   await type("Burak"); await press("Tab");
-  check("Tab seçimi uygular ve sağa geçmez (son sütun → sonraki satır)", (await cell(0, 6)) === "Burak Yılmaz" && (await active()) === "1:0", `${await cell(0, 6)} ${await active()}`);
-  // Tarih ve saat klavyeyle
-  await clickCell(0, 4); await type(""); await press("1"); await type("2.11.2026"); await press("Tab");
-  await press("1"); await type("630"); await press("Enter");
-  check("Tarih ve saat klavyeyle girilir (12.11.2026 / 1630 → 16:30)", (await cell(0, 4)) === "12 Kasım 2026" && (await cell(0, 5)) === "16:30", `${await cell(0, 4)} ${await cell(0, 5)}`);
+  check("Tab seçimi uygular ve sağa geçmez (son sütun → sonraki satır)", (await cell(0, 5)) === "Burak Yılmaz" && (await active()) === "1:0", `${await cell(0, 5)} ${await active()}`);
+  // Bitiş tarihi klavyeyle
+  await clickCell(0, 4); await type(""); await press("1"); await type("2.11.2026"); await press("Enter");
+  check("Bitiş tarihi klavyeyle girilir (12.11.2026); saat sütunu yok", (await cell(0, 4)) === "12 Kasım 2026" && !(await page(`return $$("[data-bulk-grid] thead th").some((t) => /Saat/.test(t.textContent));`)), await cell(0, 4));
   await clickCell(0, 3); await press("p"); await type("ost"); await press("Enter");
   check("Format eşleşir (post → Gönderi)", (await cell(0, 3)) === "Gönderi", await cell(0, 3));
 
@@ -137,7 +136,7 @@ try {
   await sleep(250);
   const s1 = await summary();
   check("Excel'den 20 satır yapıştırılır, satırlar otomatik oluşur", (await rowsCount()) === 20 && s1.total === 20, JSON.stringify(s1));
-  check("Eşleşmeyen alanlar hemen işaretlenir (marka, tarih, kişi)", await page(`return ["6:0", "8:4", "3:6"].every((c) => $("[data-cell='" + c + "']").getAttribute("aria-invalid") === "true");`));
+  check("Eşleşmeyen alanlar hemen işaretlenir (marka, tarih, kişi)", await page(`return ["6:0", "8:4", "3:5"].every((c) => $("[data-cell='" + c + "']").getAttribute("aria-invalid") === "true");`));
   check("Özet: 16 hazır, 4 hatalı (boş başlık dahil)", s1.ready === 16 && s1.invalid === 4, JSON.stringify(s1));
 
   /* 8. Hatalı veri kaydı engellenir */
@@ -146,12 +145,12 @@ try {
   const blocked = await page(`return { list: $("[data-bulk-errors]")?.textContent || "", saved: +$("[data-summary='saved'] dd").textContent, active: $("[data-active='true']")?.dataset.cell };`);
   check("Hatalı satırlar varken kayıt yapılmaz; hatalar satır numarasıyla listelenir",
     blocked.saved === 0 && blocked.list.includes("5. satır: Görev başlığı boş bırakılamaz.") && blocked.list.includes("7. satır: Marka bulunamadı") && (await toasts()).includes("4 satırda hata var"), JSON.stringify(blocked).slice(0, 300));
-  check("İlk hatalı hücreye gidilir; hata listesinden hücreye atlanır", blocked.active === "3:6" && await page(`byText("[data-bulk-errors] button", "9. satır").click(); await tick(); return $("[data-active='true']").dataset.cell === "8:4";`), blocked.active);
+  check("İlk hatalı hücreye gidilir; hata listesinden hücreye atlanır", blocked.active === "3:5" && await page(`byText("[data-bulk-errors] button", "9. satır").click(); await tick(); return $("[data-active='true']").dataset.cell === "8:4";`), blocked.active);
 
   // Düzelt: 5. satıra başlık, 9. satır tarihi, 4. satır kişiyi temizle; 7. satırı seç + sil
   await clickCell(4, 1); await press("B"); await type("aşlıksız satır düzeltildi"); await press("Enter");
   await clickCell(8, 4); await press("1"); await type("5.11.2026"); await press("Enter");
-  await clickCell(3, 6); await press("Delete");
+  await clickCell(3, 5); await press("Delete");
   await page(`$("input[aria-label='7. satırı seç']").click();`);
   await page(`byText("[role='toolbar'] button", "Sil").click();`);
   const s2 = await summary();
@@ -162,11 +161,11 @@ try {
   await page(`byText("[role='toolbar'] button", "Kişi ata").click();`);
   await waitFor(() => page(`return !!$("[role='dialog'][aria-label='Kişi ata']");`), 2000);
   await page(`byText("[role='dialog'][aria-label='Kişi ata'] button", "Elif Tuna").click();`);
-  await page(`byText("[role='toolbar'] button", "Teslim tarihi ata").click();`);
-  await waitFor(() => page(`return !!$("[role='dialog'][aria-label='Teslim tarihi ata'] input");`), 2000);
-  await page(`setValue($("[role='dialog'][aria-label='Teslim tarihi ata'] input"), "2026-12-01"); exact("[role='dialog'][aria-label='Teslim tarihi ata'] button", "Uygula").click(); return true;`);
+  await page(`byText("[role='toolbar'] button", "Bitiş tarihi ata").click();`);
+  await waitFor(() => page(`return !!$("[role='dialog'][aria-label='Bitiş tarihi ata'] input");`), 2000);
+  await page(`setValue($("[role='dialog'][aria-label='Bitiş tarihi ata'] input"), "2026-12-01"); exact("[role='dialog'][aria-label='Bitiş tarihi ata'] button", "Uygula").click(); return true;`);
   await sleep(150);
-  check("Seçili satırlara toplu kişi ve teslim tarihi atanır", (await cell(0, 6)) === "Elif Tuna" && (await cell(1, 6)) === "Elif Tuna" && (await cell(1, 4)) === "1 Aralık 2026" && (await cell(2, 6)) !== "Elif Tuna");
+  check("Seçili satırlara toplu kişi ve teslim tarihi atanır", (await cell(0, 5)) === "Elif Tuna" && (await cell(1, 5)) === "Elif Tuna" && (await cell(1, 4)) === "1 Aralık 2026" && (await cell(2, 5)) !== "Elif Tuna");
   await page(`byText("[role='toolbar'] button", "Seçimi kaldır").click();`);
 
   /* 12. Ağ hatası: satırlar korunur, tekrar denemede çift kayıt yok */

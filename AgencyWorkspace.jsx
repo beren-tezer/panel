@@ -29,7 +29,7 @@ import {
 } from "./checklist.js";
 import {
   CLIENT_STATUS_LABELS, PERMISSION_LABELS, ROLE_ALLOWED_TOGGLES, ROLE_DEFAULT_TOGGLES, ROLE_LABELS, ROLE_TITLES, ROLES, STATUS,
-  assignableUsers, authorize, can, canEditBrandKit, canEditContentVersion, canManageChecklists, canViewBrandKit, canViewChecklist, canWorkChecklist, isOpen, permissionsFor, roleOf,
+  assignableUsers, authorize, can, canEditBrandKit, canImpersonate, canEditContentVersion, canManageChecklists, canViewBrandKit, canViewChecklist, canWorkChecklist, isOpen, permissionsFor, roleOf,
   scopeBrandKit, scopeState, statusOptionsFor,
 } from "./rbac.js";
 import {
@@ -607,7 +607,7 @@ function createDemoState(checklistApi) {
 
 const FIELD_LABELS = {
   status: "durumu", priority: "önceliği", assigneeId: "sorumluyu", platform: "platformu", format: "görev türünü",
-  dueDate: "son teslim tarihini", dueTime: "teslim saatini", publishDate: "yayın tarihini", brandId: "markayı", title: "başlığı",
+  dueDate: "bitiş tarihini", dueTime: "teslim saatini", publishDate: "başlama tarihini", brandId: "markayı", title: "başlığı",
   checklistDisabled: "kontrol listesini",
 };
 
@@ -898,7 +898,7 @@ function matchTask(t, f, brandsById) {
 }
 
 const SORT_OPTIONS = [
-  ["due", "Son Teslim"], ["publish", "Yayın Tarihi"], ["priority", "Öncelik"], ["status", "Durum"], ["title", "Görev Adı"],
+  ["due", "Bitiş Tarihi"], ["publish", "Başlama Tarihi"], ["priority", "Öncelik"], ["status", "Durum"], ["title", "Görev Adı"],
   ["brand", "Marka"], ["assignee", "Sorumlu"], ["platform", "Platform"], ["comments", "Yorum Sayısı"], ["files", "Dosya Sayısı"],
 ];
 
@@ -1468,20 +1468,6 @@ function DeadlineLabel({ task, className = "" }) {
   );
 }
 
-function TimeInput({ value, onChange, danger, className = "" }) {
-  return (
-    <input
-      type="time"
-      value={value || ""}
-      onChange={(e) => onChange(normalizeTime(e.target.value))}
-      onClick={(e) => e.stopPropagation()}
-      aria-label="Teslim saati seç"
-      title="Teslim saati (boş bırakılırsa gün sonu)"
-      className={`h-7 w-[5.5rem] rounded-md border border-transparent bg-transparent px-1.5 cw-12 hover:border-slate-200 focus:border-orange-400 focus:bg-white focus:outline-none ${danger ? "text-red-600 font-semibold" : "text-slate-700"} ${className}`}
-    />
-  );
-}
-
 /* "Ahmet Yıldız" → "A. Yıldız" */
 const shortName = (name) => {
   const w = String(name || "").trim().split(/\s+/);
@@ -1991,7 +1977,7 @@ function DailyFeed({ brands, tasks, hasActiveFilters, onClear, onFocusBrand }) {
 
 const COLUMNS = [
   ["brand", "Marka", 170], ["title", "Görev", 290], ["platform", "Platform", 140], ["assignee", "Sorumlu", 170],
-  ["status", "Durum", 160], ["priority", "Öncelik", 110], ["publish", "Yayın Tarihi", 135], ["due", "Son Teslim", 215],
+  ["status", "Durum", 160], ["priority", "Öncelik", 110], ["publish", "Başlama Tarihi", 135], ["due", "Bitiş Tarihi", 150],
   ["comments", "Yorum", 120], ["files", "Dosya", 76], [null, "", 80],
 ];
 const TABLE_WIDTH = COLUMNS.reduce((s, c) => s + c[2], 0);
@@ -2083,12 +2069,11 @@ function ContentTable({ tasks, sort, setSort, defaultBrandId, dueDefault, isVisi
                   <td className="px-3">{canAssign ? <AssigneeMenu compact value={t.assigneeId} onChange={(v) => updateTask(t.id, { assigneeId: v }, "Sorumlu güncellendi.")} /> : <span className="inline-flex items-center gap-1.5 min-w-0"><Avatar userId={t.assigneeId} size={20} /><span className="truncate cw-12 text-slate-700">{USER_BY_ID[t.assigneeId]?.name || "Atanmamış"}</span></span>}</td>
                   <td className="px-3"><StatusMenu value={t.status} options={statusOptions(t)} onChange={(v) => updateTask(t.id, { status: v }, `Durum “${v}” olarak güncellendi.`)} /></td>
                   <td className="px-3">{canAssign ? <PriorityMenu value={t.priority} onChange={(v) => updateTask(t.id, { priority: v }, "Öncelik güncellendi.")} /> : <PriorityLabel priority={t.priority} />}</td>
-                  <td className="px-2">{canEdit ? <DateInput value={t.publishDate} onChange={(v) => updateTask(t.id, { publishDate: v }, "Yayın tarihi güncellendi.")} /> : <span className="px-1.5 cw-12 text-slate-700">{fmtDate(t.publishDate)}</span>}</td>
+                  <td className="px-2">{canEdit ? <DateInput value={t.publishDate} onChange={(v) => updateTask(t.id, { publishDate: v }, "Başlama tarihi güncellendi.")} /> : <span className="px-1.5 cw-12 text-slate-700">{fmtDate(t.publishDate)}</span>}</td>
                   <td className="px-2">
                     {canAssign ? (
                       <div className="flex items-center gap-0.5" title={deadlineInfo(t).label}>
-                        <DateInput value={t.dueDate} danger={overdue} className="flex-1 min-w-0" onChange={(v) => updateTask(t.id, { dueDate: v }, "Son teslim tarihi güncellendi.")} />
-                        <TimeInput value={t.dueTime} danger={overdue} onChange={(v) => updateTask(t.id, { dueTime: v }, "Teslim saati güncellendi.")} />
+                        <DateInput value={t.dueDate} danger={overdue} className="flex-1 min-w-0" onChange={(v) => updateTask(t.id, { dueDate: v }, "Bitiş tarihi güncellendi.")} />
                       </div>
                     ) : <span className="px-1.5 cw-12"><DeadlineLabel task={t} /></span>}
                   </td>
@@ -2758,13 +2743,12 @@ function TaskDrawer({ task, focus, focusKey, onClose }) {
               <PropertyRow icon={Layers} label="Marka">{canAssign ? <BrandMenu value={task.brandId} onChange={(v) => updateTask(task.id, { brandId: v }, "Marka güncellendi.")} /> : <span className="inline-flex items-center gap-1.5"><BrandLogo brand={brand} size={22} /><span className="cw-12 font-medium text-slate-700">{brand?.name}</span></span>}</PropertyRow>
               <PropertyRow icon={LayoutGrid} label="Platform">{canEdit ? <PlatformMenu value={task.platform} onChange={(v) => updateTask(task.id, { platform: v }, "Platform güncellendi.")} /> : <PlatformChip platform={task.platform} />}</PropertyRow>
               <PropertyRow icon={Type} label="Görev Türü">{canEdit ? <FormatMenu value={task.format} onChange={(v) => updateTask(task.id, { format: v }, "Görev türü güncellendi.")} /> : <span className="cw-12 text-slate-700">{task.format}</span>}</PropertyRow>
-              <PropertyRow icon={Calendar} label="Yayın Tarihi"><div className="w-44">{canEdit ? <DateInput value={task.publishDate} onChange={(v) => updateTask(task.id, { publishDate: v }, "Yayın tarihi güncellendi.")} /> : readDate(task.publishDate)}</div></PropertyRow>
-              <PropertyRow icon={Clock} label="Son Teslim">
+              <PropertyRow icon={Calendar} label="Başlama Tarihi"><div className="w-44">{canEdit ? <DateInput value={task.publishDate} onChange={(v) => updateTask(task.id, { publishDate: v }, "Başlama tarihi güncellendi.")} /> : readDate(task.publishDate)}</div></PropertyRow>
+              <PropertyRow icon={Clock} label="Bitiş Tarihi">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
                   {canAssign ? (
                     <span className="inline-flex items-center gap-0.5">
-                      <span className="w-36"><DateInput value={task.dueDate} danger={isOverdue(task)} onChange={(v) => updateTask(task.id, { dueDate: v }, "Son teslim tarihi güncellendi.")} /></span>
-                      <TimeInput value={task.dueTime} danger={isOverdue(task)} onChange={(v) => updateTask(task.id, { dueTime: v }, "Teslim saati güncellendi.")} />
+                      <span className="w-36"><DateInput value={task.dueDate} danger={isOverdue(task)} onChange={(v) => updateTask(task.id, { dueDate: v }, "Bitiş tarihi güncellendi.")} /></span>
                     </span>
                   ) : readDate(task.dueDate, isOverdue(task))}
                   <DeadlineLabel task={task} className="cw-11" />
@@ -2866,7 +2850,7 @@ function NewTaskModal({ presetBrandId, defaultDate, onClose, onCreated }) {
     const next = {};
     if (!form.title.trim()) next.title = "Görev başlığı zorunludur.";
     if (!form.brandId) next.brandId = "Bir marka seçin.";
-    if (!form.dueDate) next.dueDate = "Son teslim tarihi seçin.";
+    if (!form.dueDate) next.dueDate = "Bitiş tarihi seçin.";
     setErrors(next);
     if (Object.keys(next).length) return;
     const now = new Date().toISOString();
@@ -2907,14 +2891,11 @@ function NewTaskModal({ presetBrandId, defaultDate, onClose, onCreated }) {
         <Field label="Öncelik">
           <select value={form.priority} onChange={(e) => set("priority", e.target.value)} className={inputCls()}>{PRIORITIES.map((p) => <option key={p}>{p}</option>)}</select>
         </Field>
-        <Field label="Yayın Tarihi">
+        <Field label="Başlama Tarihi">
           <input type="date" value={form.publishDate} onChange={(e) => set("publishDate", e.target.value)} className={inputCls()} />
         </Field>
-        <Field label="Son Teslim" error={errors.dueDate}>
-          <div className="flex gap-2">
-            <input type="date" value={form.dueDate} onChange={(e) => set("dueDate", e.target.value)} aria-label="Son teslim tarihi" className={inputCls(errors.dueDate).replace("w-full", "flex-1 min-w-0")} />
-            <input type="time" value={form.dueTime} onChange={(e) => set("dueTime", e.target.value)} aria-label="Teslim saati" title="Boş bırakılırsa gün sonu" className={inputCls().replace("w-full", "w-28 shrink-0")} />
-          </div>
+        <Field label="Bitiş Tarihi" error={errors.dueDate}>
+          <input type="date" value={form.dueDate} onChange={(e) => set("dueDate", e.target.value)} aria-label="Bitiş tarihi" className={inputCls(errors.dueDate)} />
         </Field>
         <Field label="Açıklama" full>
           <textarea value={form.description} onChange={(e) => set("description", e.target.value)} rows={3} placeholder="Brief veya notlar (detay panelinde zengin metinle düzenleyebilirsiniz)" className="w-full rounded-lg border border-slate-200 px-3 py-2 cw-13 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100 resize-y" />
@@ -3132,10 +3113,8 @@ function SheetCard({ row, index, errors, showErrors, checked, lists, update, han
           <select value={row.platform} onChange={(e) => update(row.id, (r) => bulkSetValue(r, "platform", e.target.value))} className={fieldCls("platform")}>{BULK_PLATFORMS.map((p) => <option key={p}>{p}</option>)}</select>) })}
         {F({ k: "format", label: "Görev Türü", children: (
           <select value={row.format} onChange={(e) => update(row.id, (r) => bulkSetValue(r, "format", e.target.value))} className={fieldCls("format")}>{BULK_FORMATS.map((p) => <option key={p}>{p}</option>)}</select>) })}
-        {F({ k: "dueDate", label: "Teslim Tarihi", children: (
+        {F({ k: "dueDate", label: "Bitiş Tarihi", children: (
           <input type="date" value={row.dueDate} onChange={(e) => update(row.id, (r) => bulkSetValue(r, "dueDate", e.target.value))} className={fieldCls("dueDate")} />) })}
-        {F({ k: "dueTime", label: "Teslim Saati", children: (
-          <input type="time" value={row.dueTime} onChange={(e) => update(row.id, (r) => bulkSetValue(r, "dueTime", e.target.value))} className={fieldCls("dueTime")} />) })}
         <div className="col-span-2">{F({ k: "assignee", label: "Atanan Kişi", children: (
           <select value={row.assigneeId} onChange={(e) => update(row.id, (r) => bulkSetValue(r, "assignee", e.target.value))} className={fieldCls("assignee")}>
             <option value="">{row.bad.assignee != null ? `“${row.bad.assignee}” bulunamadı — seçin` : "Atanmamış"}</option>
@@ -3160,7 +3139,7 @@ function BulkAssignMenu({ label, icon: Icon, options, onApply, date }) {
       <Floating anchorEl={anchor} open={open} onClose={close} width={240} label={label}>
         {date ? (
           <form className="p-2 space-y-2" onSubmit={(e) => { e.preventDefault(); if (d) { onApply(d); close(); } }}>
-            <input type="date" value={d} onChange={(e) => setD(e.target.value)} aria-label="Teslim tarihi" className={inputCls()} autoFocus />
+            <input type="date" value={d} onChange={(e) => setD(e.target.value)} aria-label="Bitiş tarihi" className={inputCls()} autoFocus />
             <Btn size="sm" variant="primary" type="submit" className="w-full" disabled={!d}>Uygula</Btn>
           </form>
         ) : (
@@ -3186,7 +3165,7 @@ function PasteDialog({ onClose, onPaste }) {
     <Modal title="Excel / E-Tablolar'dan Yapıştır" subtitle="Satırlar tablonun sonuna eklenir. Başlık satırı varsa sütunlar adlarına göre eşleştirilir." onClose={onClose} width={640}
       footer={<><Btn variant="ghost" onClick={onClose}>Vazgeç</Btn><Btn variant="primary" disabled={!text.trim()} onClick={() => onPaste(text)}><ClipboardList size={14} />Tabloya Ekle</Btn></>}>
       <textarea autoFocus value={text} onChange={(e) => setText(e.target.value)} rows={9} spellCheck={false} aria-label="Yapıştırılacak veri"
-        placeholder={"Marka\tGörev Başlığı\tPlatform\tGörev Türü\tTeslim Tarihi\tTeslim Saati\tAtanan Kişi\nSofra Pide\tKasım menüsü Reels\tInstagram\tReels\t12.11.2026\t16:30\tBurak"}
+        placeholder={"Marka\tGörev Başlığı\tPlatform\tGörev Türü\tBitiş Tarihi\tAtanan Kişi\nSofra Pide\tKasım menüsü Reels\tInstagram\tReels\t12.11.2026\tBurak"}
         className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 font-mono cw-12 outline-none focus:bg-white focus:border-orange-400 focus:ring-2 focus:ring-orange-100 resize-y" />
       <p className="mt-2 cw-11 text-slate-500">Excel, Google E-Tablolar (sekme ayrımlı), Markdown tablosu veya ; / , ayrımlı metin desteklenir.</p>
     </Modal>
@@ -3546,7 +3525,7 @@ function BulkTaskSheet({ draftScope, createTasks, onClose }) {
             <span className="cw-12 font-semibold text-orange-900">{checkedCount} satır seçildi</span>
             <BulkAssignMenu label="Marka ata" icon={Layers} options={lists.options.brand} onApply={(v) => applyToChecked("brand", v)} />
             <BulkAssignMenu label="Kişi ata" icon={Users} options={lists.options.assignee} onApply={(v) => applyToChecked("assignee", v)} />
-            <BulkAssignMenu label="Teslim tarihi ata" icon={Calendar} date onApply={(v) => applyToChecked("dueDate", v)} />
+            <BulkAssignMenu label="Bitiş tarihi ata" icon={Calendar} date onApply={(v) => applyToChecked("dueDate", v)} />
             <Btn size="sm" variant="secondary" onClick={() => { const ids = rows.filter((r) => checked.has(r.id)).map((r) => r.id); ids.forEach(duplicate); }}><Copy size={13} />Çoğalt</Btn>
             <Btn size="sm" variant="danger" onClick={() => removeRows([...checked])}><Trash2 size={13} />Sil</Btn>
             <Btn size="sm" variant="ghost" onClick={() => setChecked(new Set())}>Seçimi kaldır</Btn>
@@ -5067,7 +5046,7 @@ function TeamPage({ search, onViewBrand, onViewKit, onViewTasks, onViewPortal, o
                       <td className={`${td} whitespace-nowrap text-right`}>
                         <IconAction icon={User} label="Profili Gör" onClick={() => open({ kind: "profile", userId: u.id })} />
                         <IconAction icon={Layers} label="Marka Ata" tone="orange" onClick={() => open({ kind: "user-brands", userId: u.id })} />
-                        <IconAction icon={ExternalLink} label="Portalı Görüntüle" disabled={u.active === false || !ids.length} onClick={() => onViewPortal(u.id)} />
+                        {onViewPortal && <IconAction icon={ExternalLink} label="Portalı Görüntüle" disabled={u.active === false || !ids.length} onClick={() => onViewPortal(u.id)} />}
                       </td>
                     </tr>
                   );
@@ -5503,7 +5482,7 @@ function ContentDetailModal({ taskId, onClose }) {
         </div>
         <div className="md:col-span-2 space-y-4">
           <dl className="space-y-2">
-            {[["Durum", <ClientStatusBadge key="s" status={task.status} />], ["Platform", <PlatformChip key="p" platform={task.platform} />], ["İçerik Türü", task.format], ["Yayın Tarihi", fmtDateLong(task.publishDate)], ["Son Güncelleme", fmtDateTime(task.updatedAt || task.createdAt)]].map(([k, v]) => (
+            {[["Durum", <ClientStatusBadge key="s" status={task.status} />], ["Platform", <PlatformChip key="p" platform={task.platform} />], ["İçerik Türü", task.format], ["Başlama Tarihi", fmtDateLong(task.publishDate)], ["Son Güncelleme", fmtDateTime(task.updatedAt || task.createdAt)]].map(([k, v]) => (
               <div key={k} className="flex items-center justify-between gap-3 cw-12"><dt className="text-slate-500">{k}</dt><dd className="text-slate-900 font-medium text-right">{v}</dd></div>
             ))}
           </dl>
@@ -7586,7 +7565,8 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
   const opsTitle = tab === "files" ? (selectedBrand ? `${selectedBrand.name} · Marka Dosyaları` : "Marka Dosyaları")
     : tab === "kit" ? (selectedBrand ? `${selectedBrand.name} · Marka Kılavuzu` : "Marka Kılavuzu") : selectedBrand ? selectedBrand.name : role === "employee" ? "Görevlerim" : "Tüm Markalar";
   const title = currentPage === "ops" ? opsTitle : PAGE_TITLES[currentPage];
-  const showSwitcher = allowImpersonation || roleOf(realUser) === "admin";
+  // Geçiş yalnızca izinli hesaba (rbac.js IMPERSONATION_ALLOWLIST) açık; demo/geliştirme kaynağında (allowImpersonation) herkese.
+  const showSwitcher = allowImpersonation || canImpersonate(realUser);
   const impersonating = actor.id !== realUserId;
   const tabs = TABS.filter((t) => t.key !== "files" || perms.has("canViewBrandFiles"));
   const navCounts = {
@@ -7627,7 +7607,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
         onViewBrand={(id) => { selectBrand(id); setPage("ops"); setTab("feed"); setFilters(emptyFilters()); scrollTop(); }}
         onViewTasks={(userId) => { setFilters({ ...emptyFilters(), assignee: userId }); setSelectedBrandId("all"); setPage("ops"); setTab("table"); scrollTop(); }}
         onViewKit={(id) => { selectBrand(id); setPage("ops"); setTab("kit"); scrollTop(); }}
-        onViewPortal={(userId) => onViewAs(userId)} />
+        onViewPortal={showSwitcher ? (userId) => onViewAs(userId) : null} />
     );
   } else if (currentPage === "users") pageNode = <UsersPage search={filters.search} />;
   else if (currentPage === "agreement") pageNode = <AgreementAdminPage text={state.agreementText} api={agreementApi} search={filters.search} />;
@@ -7841,7 +7821,13 @@ function useWorkspaceStore(source) {
   }, [source, load]);
   dispatchRef.current = dispatch;
 
-  const viewAs = useCallback((userId) => { viewAsRef.current = userId; setViewAsId(userId); }, []);
+  // Başka kullanıcıya geçiş yalnızca izinli hesapta (canImpersonate) ya da demo kaynağında; kendi görünümüne dönüş her zaman serbest.
+  const viewAs = useCallback((userId) => {
+    const real = realRef.current;
+    const me = stateRef.current?.users.find((u) => u.id === real);
+    if (userId !== real && !source.allowImpersonation && !canImpersonate(me)) return;
+    viewAsRef.current = userId; setViewAsId(userId);
+  }, [source]);
 
   // Canlı güncelleme: diğer üyelerin değişiklikleri anında yerel duruma işlenir.
   // Bağlantı koparsa yeniden bağlanınca kaçırılan değişiklikler için tam yükleme yapılır.

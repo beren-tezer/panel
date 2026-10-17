@@ -983,14 +983,12 @@ function Btn({ variant = "secondary", size = "md", className = "", children, ...
   return <button type="button" className={`${base} ${sizes[size]} ${variants[variant]} ${className}`} {...rest}>{children}</button>;
 }
 
-function LogoMark({ size = 28 }) {
-  return (
-    <span aria-hidden="true" className="relative block shrink-0 rounded-lg bg-orange-600" style={{ width: size, height: size, transform: "rotate(-5deg)" }}>
-      <span className="absolute rounded-sm bg-white" style={{ width: 6, height: 14, left: 6, top: 7 }} />
-      <span className="absolute rounded-sm bg-white" style={{ width: 6, height: 10, left: 14, top: 5 }} />
-      <span className="absolute rounded-sm bg-white" style={{ width: 6, height: 5, left: 14, top: 16 }} />
-    </span>
-  );
+/* Atlas Ajans logosu (public/icons/brand-logo.png, 1000×141, saydam zemin). Yükseklik verilir, genişlik orana göre hesaplanır;
+   width/height öznitelikleri görsel yüklenmeden yer ayırır (sayfa kaymaz). */
+const LOGO_SRC = `${import.meta.env?.BASE_URL || "/"}icons/brand-logo.png`;
+function LogoImage({ height = 24, className = "" }) {
+  return <img src={LOGO_SRC} alt="Atlas Ajans" width={Math.round((height * 1000) / 141)} height={height} draggable={false}
+    className={`block shrink-0 max-w-full h-auto object-contain object-left select-none ${className}`} style={{ maxHeight: height }} />;
 }
 
 function Avatar({ userId, size = 20 }) {
@@ -1523,11 +1521,7 @@ function Sidebar({ open, onClose, navItems, activeNav, onNav, counts, selectedBr
         <div className="h-16 shrink-0 flex items-center gap-2.5 px-4 border-b border-slate-100">
           <button type="button" onClick={onHome} aria-label="AgencyOS: ana görünüme dön (tüm markalar)" title="Ana görünüme dön" data-home-link=""
             className="flex-1 min-w-0 flex items-center gap-2.5 -mx-1.5 px-1.5 py-1 rounded-lg text-left cursor-pointer hover:bg-slate-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300">
-            <LogoMark />
-            <span className="flex-1 min-w-0 leading-tight">
-              <span className="block cw-13 font-bold tracking-tight text-slate-900">AgencyOS</span>
-              <span className="block cw-10 text-slate-400 font-medium">Ajans İşletim Sistemi</span>
-            </span>
+            <LogoImage height={24} />
           </button>
           <button type="button" onClick={onClose} className="lg:hidden p-1.5 rounded-md text-slate-500 hover:bg-slate-100" aria-label="Menüyü kapat"><X size={17} /></button>
         </div>
@@ -7923,9 +7917,9 @@ function LoginScreen({ auth }) {
   const busy = status.name === "sending" || status.name === "signing-in";
   return (
     <FullScreenMessage>
-      <div className="flex items-center gap-2.5 mb-5">
-        <span className="h-9 w-9 rounded-xl bg-orange-500 text-white flex items-center justify-center"><Layers size={18} /></span>
-        <div><p className="cw-13 font-semibold text-slate-900">AgencyOS</p><p className="cw-12 text-slate-400">Giriş</p></div>
+      <div className="mb-6">
+        <LogoImage height={32} />
+        <p className="mt-3 cw-12 text-slate-400">Workspace · Giriş</p>
       </div>
       {status.name === "sent" ? (
         <div role="status" className="cw-13 text-slate-700">

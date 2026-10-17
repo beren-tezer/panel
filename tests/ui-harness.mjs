@@ -68,6 +68,8 @@ export async function startHarness({ port = 5179, debugPort = 9333, viteArgs = [
   };
 
   await waitFor(() => fetch(`http://localhost:${port}/`).then((r) => r.ok));
+  // Büyük ana dosya ilk istekte uzun derlenir; sayfa açılmadan önce ısıtılır (ilk bekleme zaman aşımına düşmesin).
+  if (!viteArgs.includes("preview")) await fetch(`http://localhost:${port}/AgencyWorkspace.jsx`).catch(() => {});
   const target = await waitFor(() => fetch(`http://127.0.0.1:${debugPort}/json/new?about:blank`, { method: "PUT" }).then((r) => r.json()));
   ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });

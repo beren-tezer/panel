@@ -15,7 +15,7 @@ export const BULK_COLUMNS = [
   { key: "brand", label: "Marka", type: "brand", field: "brandId", width: 190 },
   { key: "title", label: "Görev Başlığı", type: "text", field: "title", width: 320 },
   { key: "platform", label: "Platform", type: "option", field: "platform", width: 150 },
-  { key: "format", label: "Format", type: "option", field: "format", width: 130 },
+  { key: "format", label: "Görev Türü", type: "option", field: "format", width: 130 },
   { key: "dueDate", label: "Teslim Tarihi", type: "date", field: "dueDate", width: 160 },
   { key: "dueTime", label: "Teslim Saati", type: "time", field: "dueTime", width: 120 },
   { key: "assignee", label: "Atanan Kişi", type: "user", field: "assigneeId", width: 190 },
@@ -177,7 +177,7 @@ export function cellText(row, key, ctx) {
 /* ───────────────────────── Doğrulama ───────────────────────── */
 
 const LABEL_ERRORS = {
-  brand: (v) => `Marka bulunamadı: “${v}”.`, assignee: (v) => `Ekip üyesi bulunamadı: “${v}”.`, format: (v) => `Format tanınmadı: “${v}”.`,
+  brand: (v) => `Marka bulunamadı: “${v}”.`, assignee: (v) => `Ekip üyesi bulunamadı: “${v}”.`, format: (v) => `Görev türü tanınmadı: “${v}”.`,
   platform: (v) => `Platform tanınmadı: “${v}”.`, dueDate: (v) => `Teslim tarihi okunamadı: “${v}” (örn. 12.11.2026).`, dueTime: (v) => `Teslim saati okunamadı: “${v}” (örn. 16:30).`,
 };
 
@@ -193,7 +193,7 @@ export function validateRow(row, ctx) {
   }
   if (!row.title.trim()) e.title = "Görev başlığı boş bırakılamaz.";
   if (!e.platform && !BULK_PLATFORMS.includes(row.platform)) e.platform = "Platform seçilmedi.";
-  if (!e.format && !BULK_FORMATS.includes(row.format)) e.format = "Format seçilmedi.";
+  if (!e.format && !BULK_FORMATS.includes(row.format)) e.format = "Görev türü seçilmedi.";
   if (!e.dueDate && !row.dueDate) e.dueDate = "Teslim tarihi girilmedi.";
   if (!e.assignee && row.assigneeId && !ctx.users.some((u) => u.id === row.assigneeId)) e.assignee = "Bu kişiye görev atanamaz.";
   return e;
@@ -275,7 +275,7 @@ const HEADER_ALIASES = {
   brand: ["marka", "brand", "musteri", "client"],
   title: ["gorev basligi", "gorev", "baslik", "icerik", "task", "title", "is"],
   platform: ["platform", "kanal", "channel"],
-  format: ["format", "tur", "icerik turu", "type"],
+  format: ["gorev turu", "format", "tur", "icerik turu", "type"],
   dueDate: ["teslim tarihi", "son teslim", "tarih", "teslim", "deadline", "due date", "due", "date"],
   dueTime: ["teslim saati", "saat", "time", "due time"],
   assignee: ["atanan kisi", "atanan", "sorumlu", "kisi", "ekip uyesi", "assignee", "owner"],

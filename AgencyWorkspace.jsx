@@ -434,7 +434,7 @@ const COMMENT_TEXTS = [
 ];
 
 function seedDescription(brief, format, brand) {
-  return `<p><strong>Brief:</strong> ${escHtml(brief)}</p><ul><li>Marka kimlik rehberindeki renk ve tipografi kullanılacak.</li><li>${escHtml(format)} formatına uygun ölçüler ve güvenli alanlar kontrol edilecek.</li><li>Yayın öncesi yönetici onayı alınacak.</li></ul><p>Referans: <a href="${DRIVE.folder(brand.driveFolderId)}" target="_blank" rel="noopener noreferrer">${escHtml(brand.name)} Drive klasörü</a></p>`;
+  return `<p><strong>Brief:</strong> ${escHtml(brief)}</p><ul><li>Marka kimlik rehberindeki renk ve tipografi kullanılacak.</li><li>${escHtml(format)} türüne uygun ölçüler ve güvenli alanlar kontrol edilecek.</li><li>Yayın öncesi yönetici onayı alınacak.</li></ul><p>Referans: <a href="${DRIVE.folder(brand.driveFolderId)}" target="_blank" rel="noopener noreferrer">${escHtml(brand.name)} Drive klasörü</a></p>`;
 }
 
 /* Demo kontrol listesi şablonları: tüm markalar için varsayılan + Tepe Emlak'a özel sosyal medya listesi. */
@@ -606,7 +606,7 @@ function createDemoState(checklistApi) {
 /* ───────────────────────── Merkezi durum (reducer) ───────────────────────── */
 
 const FIELD_LABELS = {
-  status: "durumu", priority: "önceliği", assigneeId: "sorumluyu", platform: "platformu", format: "formatı",
+  status: "durumu", priority: "önceliği", assigneeId: "sorumluyu", platform: "platformu", format: "görev türünü",
   dueDate: "son teslim tarihini", dueTime: "teslim saatini", publishDate: "yayın tarihini", brandId: "markayı", title: "başlığı",
   checklistDisabled: "kontrol listesini",
 };
@@ -1259,7 +1259,7 @@ function BrandMenu({ value, onChange }) {
 function FormatMenu({ value, onChange }) {
   return (
     <SelectMenu
-      value={value} onChange={onChange} title="Format" width={170} ariaLabel="Format seç"
+      value={value} onChange={onChange} title="Görev Türü" width={170} ariaLabel="Görev Türü seç"
       options={FORMATS.map((f) => ({ value: f, label: f }))}
       triggerClassName="px-1 py-0.5 -mx-1 hover:bg-slate-100"
       renderTrigger={(v) => <span className="inline-flex items-center h-5 px-1.5 rounded-md bg-slate-100 text-slate-600 cw-10 font-semibold uppercase tracking-wide">{v}</span>}
@@ -1492,7 +1492,7 @@ const shortName = (name) => {
 
 /* ───────────────────────── Kenar çubuğu ───────────────────────── */
 
-function Sidebar({ open, onClose, navItems, activeNav, onNav, counts, selectedBrandId, onSelectBrand, onNewBrand, onMyTasks, onResetFilters, onSignOut, onChangePassword, switcher }) {
+function Sidebar({ open, onClose, navItems, activeNav, onNav, counts, selectedBrandId, onSelectBrand, onHome, onNewBrand, onMyTasks, onResetFilters, onSignOut, onChangePassword, switcher }) {
   const { state } = useWS();
   const [q, setQ] = useState("");
   const [profileAnchor, setProfileAnchor] = useState(null);
@@ -1521,11 +1521,14 @@ function Sidebar({ open, onClose, navItems, activeNav, onNav, counts, selectedBr
         aria-label="Ana menü"
       >
         <div className="h-16 shrink-0 flex items-center gap-2.5 px-4 border-b border-slate-100">
-          <LogoMark />
-          <div className="flex-1 min-w-0 leading-tight">
-            <p className="cw-13 font-bold tracking-tight text-slate-900">AgencyOS</p>
-            <p className="cw-10 text-slate-400 font-medium">Ajans İşletim Sistemi</p>
-          </div>
+          <button type="button" onClick={onHome} aria-label="AgencyOS: ana görünüme dön (tüm markalar)" title="Ana görünüme dön" data-home-link=""
+            className="flex-1 min-w-0 flex items-center gap-2.5 -mx-1.5 px-1.5 py-1 rounded-lg text-left cursor-pointer hover:bg-slate-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300">
+            <LogoMark />
+            <span className="flex-1 min-w-0 leading-tight">
+              <span className="block cw-13 font-bold tracking-tight text-slate-900">AgencyOS</span>
+              <span className="block cw-10 text-slate-400 font-medium">Ajans İşletim Sistemi</span>
+            </span>
+          </button>
           <button type="button" onClick={onClose} className="lg:hidden p-1.5 rounded-md text-slate-500 hover:bg-slate-100" aria-label="Menüyü kapat"><X size={17} /></button>
         </div>
 
@@ -2760,7 +2763,7 @@ function TaskDrawer({ task, focus, focusKey, onClose }) {
               <PropertyRow icon={Users} label="Sorumlu">{canAssign ? <AssigneeMenu value={task.assigneeId} onChange={(v) => updateTask(task.id, { assigneeId: v }, "Sorumlu güncellendi.")} /> : <span className="inline-flex items-center gap-1.5"><Avatar userId={task.assigneeId} size={22} /><span className="cw-12 font-medium text-slate-700">{USER_BY_ID[task.assigneeId]?.name || "Atanmamış"}</span></span>}</PropertyRow>
               <PropertyRow icon={Layers} label="Marka">{canAssign ? <BrandMenu value={task.brandId} onChange={(v) => updateTask(task.id, { brandId: v }, "Marka güncellendi.")} /> : <span className="inline-flex items-center gap-1.5"><BrandLogo brand={brand} size={22} /><span className="cw-12 font-medium text-slate-700">{brand?.name}</span></span>}</PropertyRow>
               <PropertyRow icon={LayoutGrid} label="Platform">{canEdit ? <PlatformMenu value={task.platform} onChange={(v) => updateTask(task.id, { platform: v }, "Platform güncellendi.")} /> : <PlatformChip platform={task.platform} />}</PropertyRow>
-              <PropertyRow icon={Type} label="Format">{canEdit ? <FormatMenu value={task.format} onChange={(v) => updateTask(task.id, { format: v }, "Format güncellendi.")} /> : <span className="cw-12 text-slate-700">{task.format}</span>}</PropertyRow>
+              <PropertyRow icon={Type} label="Görev Türü">{canEdit ? <FormatMenu value={task.format} onChange={(v) => updateTask(task.id, { format: v }, "Görev türü güncellendi.")} /> : <span className="cw-12 text-slate-700">{task.format}</span>}</PropertyRow>
               <PropertyRow icon={Calendar} label="Yayın Tarihi"><div className="w-44">{canEdit ? <DateInput value={task.publishDate} onChange={(v) => updateTask(task.id, { publishDate: v }, "Yayın tarihi güncellendi.")} /> : readDate(task.publishDate)}</div></PropertyRow>
               <PropertyRow icon={Clock} label="Son Teslim">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
@@ -2901,7 +2904,7 @@ function NewTaskModal({ presetBrandId, defaultDate, onClose, onCreated }) {
         <Field label="Platform">
           <select value={form.platform} onChange={(e) => set("platform", e.target.value)} className={inputCls()}>{PLATFORMS.map((p) => <option key={p}>{p}</option>)}</select>
         </Field>
-        <Field label="Format">
+        <Field label="Görev Türü">
           <select value={form.format} onChange={(e) => set("format", e.target.value)} className={inputCls()}>{FORMATS.map((p) => <option key={p}>{p}</option>)}</select>
         </Field>
         <Field label="Durum">
@@ -3133,7 +3136,7 @@ function SheetCard({ row, index, errors, showErrors, checked, lists, update, han
           <textarea value={row.title} rows={2} maxLength={300} onChange={(e) => update(row.id, (r) => ({ ...r, title: e.target.value.replace(/\n/g, " ") }), "title")} placeholder="Görev başlığı" className={`${fieldCls("title")} h-auto py-2 resize-none`} />) })}</div>
         {F({ k: "platform", label: "Platform", children: (
           <select value={row.platform} onChange={(e) => update(row.id, (r) => bulkSetValue(r, "platform", e.target.value))} className={fieldCls("platform")}>{BULK_PLATFORMS.map((p) => <option key={p}>{p}</option>)}</select>) })}
-        {F({ k: "format", label: "Format", children: (
+        {F({ k: "format", label: "Görev Türü", children: (
           <select value={row.format} onChange={(e) => update(row.id, (r) => bulkSetValue(r, "format", e.target.value))} className={fieldCls("format")}>{BULK_FORMATS.map((p) => <option key={p}>{p}</option>)}</select>) })}
         {F({ k: "dueDate", label: "Teslim Tarihi", children: (
           <input type="date" value={row.dueDate} onChange={(e) => update(row.id, (r) => bulkSetValue(r, "dueDate", e.target.value))} className={fieldCls("dueDate")} />) })}
@@ -3189,7 +3192,7 @@ function PasteDialog({ onClose, onPaste }) {
     <Modal title="Excel / E-Tablolar'dan Yapıştır" subtitle="Satırlar tablonun sonuna eklenir. Başlık satırı varsa sütunlar adlarına göre eşleştirilir." onClose={onClose} width={640}
       footer={<><Btn variant="ghost" onClick={onClose}>Vazgeç</Btn><Btn variant="primary" disabled={!text.trim()} onClick={() => onPaste(text)}><ClipboardList size={14} />Tabloya Ekle</Btn></>}>
       <textarea autoFocus value={text} onChange={(e) => setText(e.target.value)} rows={9} spellCheck={false} aria-label="Yapıştırılacak veri"
-        placeholder={"Marka\tGörev Başlığı\tPlatform\tFormat\tTeslim Tarihi\tTeslim Saati\tAtanan Kişi\nSofra Pide\tKasım menüsü Reels\tInstagram\tReels\t12.11.2026\t16:30\tBurak"}
+        placeholder={"Marka\tGörev Başlığı\tPlatform\tGörev Türü\tTeslim Tarihi\tTeslim Saati\tAtanan Kişi\nSofra Pide\tKasım menüsü Reels\tInstagram\tReels\t12.11.2026\t16:30\tBurak"}
         className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 font-mono cw-12 outline-none focus:bg-white focus:border-orange-400 focus:ring-2 focus:ring-orange-100 resize-y" />
       <p className="mt-2 cw-11 text-slate-500">Excel, Google E-Tablolar (sekme ayrımlı), Markdown tablosu veya ; / , ayrımlı metin desteklenir.</p>
     </Modal>
@@ -3522,7 +3525,7 @@ function BulkTaskSheet({ draftScope, createTasks, onClose }) {
             onChange={(v) => addRows(Number(v))} triggerClassName="h-8 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50"
             renderTrigger={() => <span className="inline-flex items-center gap-1 cw-12 font-semibold text-slate-700"><Layers size={13} />Satır ekle<ChevronDown size={12} /></span>} />
           <Btn size="sm" variant="secondary" onClick={() => setPasteOpen(true)} disabled={!!draft}><ClipboardList size={13} /><span className="hidden sm:inline">Excel'den </span>Yapıştır</Btn>
-          <label className="inline-flex items-center gap-1.5 h-8 px-1.5 cw-12 text-slate-600 cursor-pointer select-none" title="Yeni satırda önceki satırın marka, platform, format ve kişisi kullanılır (başlık hariç).">
+          <label className="inline-flex items-center gap-1.5 h-8 px-1.5 cw-12 text-slate-600 cursor-pointer select-none" title="Yeni satırda önceki satırın marka, platform, görev türü ve kişisi kullanılır (başlık hariç).">
             <input type="checkbox" checked={carry} onChange={(e) => setCarry(e.target.checked)} className="h-4 w-4 accent-orange-600" />Önceki satırdan taşı
           </label>
           <span className="inline-flex items-center gap-0.5">
@@ -4190,6 +4193,9 @@ function OpsBox({ box, tasks }) {
   );
 }
 
+/* Ekranda gösterilen kutular (Geciken & Acil İşler, Yönetici Onayı, Müşteri Onayı, Aktif Çalışmalar gizli). */
+const VISIBLE_OPS_BOXES = new Set(["done", "web", "agency", "ads"]);
+
 function OpsDesk({ tasks, open, onToggle }) {
   const { brandsById } = useWS();
   const now = useNow();
@@ -4237,7 +4243,7 @@ function OpsDesk({ tasks, open, onToggle }) {
             ))}
           </div>
           <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4" data-ops-boxes="">
-            {OPS_BOXES.map((b) => <OpsBox key={b.key} box={b} tasks={groups[b.key]} />)}
+            {OPS_BOXES.filter((b) => VISIBLE_OPS_BOXES.has(b.key)).map((b) => <OpsBox key={b.key} box={b} tasks={groups[b.key]} />)}
           </div>
         </div>
       )}
@@ -7566,6 +7572,13 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
   const activeNav = currentPage === "ops" ? opsNav : currentPage;
 
   const selectBrand = (id) => { setSelectedBrandId(id); setFolderId(null); setSidebarOpen(false); };
+  // Logo: marka seçimi ve filtreler sıfırlanır, rolün ana görünümü tüm markalarla açılır (adres değişmez).
+  const goHome = () => {
+    clearFilters(); setSelectedBrandId("all"); setFolderId(null); setSidebarOpen(false);
+    setPage(DEFAULT_PAGE[role]);
+    if (role === "admin") { setTab("feed"); setOverviewOpen(true); }
+    scrollTop();
+  };
   const focusBrand = (id, nextTab) => { selectBrand(id); setPage("ops"); setTab(nextTab); scrollToWorkspace(); };
 
   // Bildirime tıklayınca okundu işaretlenir ve ilgili içerik/görev açılır.
@@ -7647,6 +7660,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
           counts={navCounts}
           selectedBrandId={selectedBrandId}
           onSelectBrand={selectBrand}
+          onHome={goHome}
           onNewBrand={perms.has("canCreateBrand") ? () => setBrandModal(true) : null}
           onMyTasks={role === "client" ? null : () => { setFilters({ ...emptyFilters(), assignee: actor.id }); setPage("ops"); setTab(role === "employee" ? "table" : "feed"); notify("Size atanan görevler listelendi.", "info"); }}
           onResetFilters={() => { clearFilters(); setSelectedBrandId("all"); notify("Tüm filtreler sıfırlandı.", "info"); }}

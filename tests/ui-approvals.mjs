@@ -79,7 +79,7 @@ try {
   await page(`$$("button").find((b) => b.textContent.trim() === "Yeni Görev" || b.getAttribute("aria-label") === "Yeni Görev").click();`);
   await waitFor(() => page(`return !!$("[role='dialog'][aria-label='Yeni Görev']");`), 2000);
   await page(`setValue(${field("Görev Başlığı")}, ${JSON.stringify(TITLE)});
-    setValue(${field("Marka")}, "b-tepe"); setValue(${field("Sorumlu")}, "u2"); setValue(${field("Format")}, "Gönderi"); return true;`);
+    setValue(${field("Marka")}, "b-tepe"); setValue(${field("Sorumlu")}, "u2"); setValue(${field("Görev Türü")}, "Gönderi"); return true;`);
   await page(`exact("button", "Görevi Oluştur").click();`);
   await sleep(300);
   check("Admin görevi oluşturur", (await toasts()).includes("Görev oluşturuldu"), await toasts());

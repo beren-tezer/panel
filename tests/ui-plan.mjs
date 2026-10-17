@@ -7,7 +7,7 @@ const h = await startHarness({ port: 5192, debugPort: 9352 });
 const { page, viewport, check, consoleProblems, send } = h;
 const SHOTS = process.env.SHOTS;
 const shot = async (name) => { if (!SHOTS) return; const r = await send("Page.captureScreenshot", { format: "png" }); writeFileSync(`${SHOTS}/${name}.png`, Buffer.from(r.data, "base64")); };
-const ORDER = ["Geciken & Acil İşler", "Yönetici Onayı", "Müşteri Onayı", "Aktif Çalışmalar", "Tamamlanan & Yayına Hazır", "Web & Teknik", "Ajans İçi İşler", "Reklam İşleri"];
+const ORDER = ["Tamamlanan & Yayına Hazır", "Web & Teknik", "Ajans İçi İşler", "Reklam İşleri"];
 const nav = (label) => page(`const b = $$("aside button").find((x) => x.textContent.trim().startsWith(${JSON.stringify(label)})); b.click(); return true;`);
 const overflow = () => page(`return document.documentElement.scrollWidth - window.innerWidth;`);
 
@@ -15,24 +15,37 @@ try {
   /* ── 1. Operasyon masası ── */
   await viewport(1440, 900);
   await send("Page.navigate", { url: h.url });
-  await waitFor(() => page(`return $$("[data-ops-box]").length === 8;`));
+  await waitFor(() => page(`return $$("[data-ops-box]").length === 4;`), 45000);
   const desk = await page(`return {
     metrics: $$("[data-ops-metric]").map((m) => [m.dataset.opsMetric, m.querySelector("p").textContent, +m.querySelector("[data-ops-value]").dataset.opsValue]),
     boxes: $$("[data-ops-box]").map((b) => { const r = b.getBoundingClientRect(); return { key: b.dataset.opsBox, title: b.querySelector("h3").textContent, n: +b.querySelector("[data-ops-count]").dataset.opsCount, items: $$("[data-ops-task]", b).map((x) => x.dataset.opsTask), x: Math.round(r.x), y: Math.round(r.y) }; }),
   };`);
   check("4 sayaç: Bugünkü Teslimatlar, Geciken İşler, Yönetici Onayı, Müşteri Onayı", JSON.stringify(desk.metrics.map((m) => m[1])) === JSON.stringify(["Bugünkü Teslimatlar", "Geciken İşler", "Yönetici Onayı", "Müşteri Onayı"]), desk.metrics.map((m) => `${m[1]}=${m[2]}`).join(", "));
-  check("8 grup, istenen sırada", JSON.stringify(desk.boxes.map((b) => b.title)) === JSON.stringify(ORDER), desk.boxes.map((b) => b.title).join(" | "));
+  check("Yalnızca 4 kutu, istenen sırada (Geciken & Acil, Yönetici Onayı, Müşteri Onayı, Aktif Çalışmalar gizli)", JSON.stringify(desk.boxes.map((b) => b.title)) === JSON.stringify(ORDER), desk.boxes.map((b) => b.title).join(" | "));
   const all = desk.boxes.flatMap((b) => b.items);
   check("Her görev yalnızca bir grupta; sayılar listeyle aynı", all.length > 0 && new Set(all).size === all.length && desk.boxes.every((b) => b.n === b.items.length), `${all.length} görev`);
-  const m = Object.fromEntries(desk.metrics.map((x) => [x[0], x[2]])), bx = Object.fromEntries(desk.boxes.map((b) => [b.key, b.n]));
-  check("Onay sayaçları gruplarla tutarlı", m.manager === bx.manager && m.client === bx.client && m.manager > 0 && m.client > 0, JSON.stringify({ m, bx }));
-  const rows = [...new Set(desk.boxes.map((b) => b.y))];
-  check("1440px: 4 sütun × 2 satır", rows.length === 2 && desk.boxes.slice(0, 4).every((b) => b.y === rows[0]) && desk.boxes.slice(4).every((b) => b.y === rows[1]));
+  check("1440px: 4 kutu tek satırda", new Set(desk.boxes.map((b) => b.y)).size === 1 && new Set(desk.boxes.map((b) => b.x)).size === 4);
   await shot("desk-1440");
-  const opened = await page(`$("[data-ops-box='manager'] [data-ops-task]").click(); await tick(400); return !!$("aside[aria-label='Görev detayı']");`);
+  const opened = await page(`$("[data-ops-box] [data-ops-task]").click(); await tick(400); return !!$("aside[aria-label='Görev detayı']");`);
   check("Gruptaki işe tıklayınca görev detayı açılır", opened);
   await page(`$("button[aria-label='Detayı kapat']")?.click(); return true;`);
   await sleep(300);
+
+  /* Logo: marka seçimi ve arama sıfırlanır, ana görünüm tüm markalarla açılır */
+  const cardCount = () => page(`return $$("[data-brand-card]").length;`);
+  const allCards = await cardCount();
+  await page(`$$("aside button[aria-pressed]").find((b) => b.textContent.includes("Tepe Emlak")).click(); return true;`);
+  await page(`setValue($("input[aria-label='Genel arama']"), "a"); return true;`);
+  await sleep(300);
+  const narrowed = await cardCount();
+  await nav("Sosyal Medya Planı");
+  await waitFor(() => page(`return !!$("[data-social-plan]");`));
+  await page(`$("[data-home-link]").click(); return true;`);
+  await waitFor(() => page(`return $$("[data-ops-box]").length === 4;`), 4000).catch(() => {});
+  await sleep(300);
+  const home = await page(`return { cards: $$("[data-brand-card]").length, pressed: $$("aside button[aria-pressed='true']").length, search: $("input[aria-label='Genel arama']").value, path: location.pathname, tag: $("[data-home-link]").tagName };`);
+  check("Logo: marka filtresi + arama sıfırlanır, ana görünüm tüm markalarla açılır (adres aynı)",
+    narrowed < allCards && home.cards === allCards && home.pressed === 0 && home.search === "" && home.path === "/dashboard" && home.tag === "BUTTON", JSON.stringify({ allCards, narrowed, ...home }));
 
   for (const [w, cols] of [[1920, 4], [1024, 2], [375, 1]]) {
     await viewport(w, 900, w < 640);

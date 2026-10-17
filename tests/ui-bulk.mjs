@@ -46,7 +46,7 @@ try {
   await openSheet();
   const head = await page(`return { cols: $$("[data-bulk-grid] thead th").map((t) => t.textContent.trim()), rows: $$("[data-sheet-row]").length, sidebar: !!$("aside nav, aside button"), title: document.body.textContent.includes("Toplu Görev Ekle") };`);
   check("Spreadsheet açılır: sütunlar, 5 başlangıç satırı, sidebar korunur",
-    head.cols.join("|") === "Sıra|Marka|Görev Başlığı|Platform|Format|Teslim Tarihi|Teslim Saati|Atanan Kişi|İşlemler" && head.rows === 5 && head.sidebar, JSON.stringify(head));
+    head.cols.join("|") === "Sıra|Marka|Görev Başlığı|Platform|Görev Türü|Teslim Tarihi|Teslim Saati|Atanan Kişi|İşlemler" && head.rows === 5 && head.sidebar, JSON.stringify(head));
 
   /* 2. Yeni satır */
   await page(`exact("button", "Yeni Satır").click();`);

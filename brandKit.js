@@ -40,7 +40,7 @@ export const ASSET_CATEGORIES = {
   media: "Görsel & Video Varlıkları",
   other: "Diğer Dosyalar",
 };
-export const LINK_CATEGORIES = { general: "Genel Drive Klasörü", ...ASSET_CATEGORIES };
+export const LINK_CATEGORIES = { general: "Genel Klasör", ...ASSET_CATEGORIES };
 export const VISIBILITY = { internal: "Yalnızca ekip", shared: "Ekip ve müşteri" };
 
 /* İzin verilen dosyalar: uzantı → [MIME, görünen tür]. Liste dışı her şey (html, js, exe, …) reddedilir.
@@ -82,7 +82,7 @@ export function validateDriveUrl(v) {
   let u;
   try { u = new URL(String(v || "").trim()); } catch { return { ok: false, error: "Geçerli bir bağlantı girin (https://…)." }; }
   if (u.protocol !== "https:") return { ok: false, error: "Bağlantı https:// ile başlamalı." };
-  if (!/^(drive|docs)\.google\.com$/.test(u.hostname)) return { ok: false, error: "Yalnızca Google Drive / Google Dokümanlar bağlantıları eklenebilir." };
+  if (!/^(drive|docs)\.google\.com$/.test(u.hostname)) return { ok: false, error: "Bu bağlantı eklenemez. Şirket dosya klasöründeki bir dosya veya klasörün bağlantısını girin." };
   return { ok: true, url: u.toString() };
 }
 

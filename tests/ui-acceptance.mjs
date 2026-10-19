@@ -180,7 +180,7 @@ try {
   check("Önizleme body'ye portallanır, ekranda kalır (kırpılmaz)", pop.inBody && pop.r.x >= 0 && pop.r.y >= 0 && pop.r.x + pop.r.w <= pop.vw && pop.r.y + pop.r.h <= pop.vh);
   // Önizlemeden dosya görüntüleyiciye
   await page(`$("[data-cw-popover][aria-label='Görev ekleri'] li button").click();`);
-  const viewer = await waitFor(() => page(`const m = byText("[data-cw-modal]", "Görev eki"); return m ? m.textContent.includes("Drive'da Aç") : null;`), 4000).catch(() => false);
+  const viewer = await waitFor(() => page(`const m = byText("[data-cw-modal]", "Görev eki"); return m ? m.textContent.includes("Dosyayı Aç") && !/drive/i.test(m.innerText) : null;`), 4000).catch(() => false);
   check("Eke tıklayınca dosya görüntüleyici açılır", viewer);
   await page(`$("[data-cw-modal] button[aria-label='Kapat']").click();`);
   await waitFor(() => page(`return !$("[data-cw-modal]");`), 4000);

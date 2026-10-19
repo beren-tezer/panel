@@ -74,22 +74,22 @@ try {
 
   /* ── Kaydedilmemiş değişiklik uyarısı ve taslağın korunması ── */
   await page(`exact("button", "Bağlantı Ekle", ${kit()}).click();`);
-  await waitFor(() => page(`return !!$("form[aria-label='Yeni Drive bağlantısı']");`));
-  await page(`setValue($("form[aria-label='Yeni Drive bağlantısı'] input[placeholder='örn. Kurumsal Drive']"), "Taslak bağlantı");`);
-  await page(`exact("form[aria-label='Yeni Drive bağlantısı'] button", "Vazgeç").click();`);
-  const warn = await waitFor(() => page(`return !!byText("form[aria-label='Yeni Drive bağlantısı'] [role='alert']", "Kaydedilmemiş değişiklikler silinecek");`), 2000).catch(() => false);
+  await waitFor(() => page(`return !!$("form[aria-label='Yeni bağlantı']");`));
+  await page(`setValue($("form[aria-label='Yeni bağlantı'] input[placeholder='örn. Kurumsal Klasör']"), "Taslak bağlantı");`);
+  await page(`exact("form[aria-label='Yeni bağlantı'] button", "Vazgeç").click();`);
+  const warn = await waitFor(() => page(`return !!byText("form[aria-label='Yeni bağlantı'] [role='alert']", "Kaydedilmemiş değişiklikler silinecek");`), 2000).catch(() => false);
   await page(`exact("button", "Düzenlemeye Dön").click();`);
   check("Vazgeçerken kaydedilmemiş değişiklik uyarısı çıkar", warn);
   await page(`$$("[role='tab']").find((b) => b.textContent.includes("İçerik Tablosu")).click();`);
   await sleep(200);
   await page(`$$("[role='tab']").find((b) => b.textContent.includes("Marka Kılavuzu")).click();`);
-  check("Sekme değişince taslak korunur", await waitFor(() => page(`const i = $("form[aria-label='Yeni Drive bağlantısı'] input[placeholder='örn. Kurumsal Drive']"); return i && i.value === "Taslak bağlantı";`), 3000).catch(() => false));
+  check("Sekme değişince taslak korunur", await waitFor(() => page(`const i = $("form[aria-label='Yeni bağlantı'] input[placeholder='örn. Kurumsal Klasör']"); return i && i.value === "Taslak bağlantı";`), 3000).catch(() => false));
 
   /* ── Drive bağlantısı ── */
-  await page(`setValue($("form[aria-label='Yeni Drive bağlantısı'] input[inputmode='url']"), "https://example.com/dosya");`);
+  await page(`setValue($("form[aria-label='Yeni bağlantı'] input[inputmode='url']"), "https://example.com/dosya");`);
   await page(`exact("button", "Bağlantıyı Ekle").click();`);
-  check("Drive dışı bağlantı reddedilir", await waitFor(() => page(`return !!byText("form[aria-label='Yeni Drive bağlantısı'] span", "Yalnızca Google Drive");`), 2000).catch(() => false));
-  await page(`setValue($("form[aria-label='Yeni Drive bağlantısı'] input[inputmode='url']"), "https://drive.google.com/drive/folders/1TestKlasor");`);
+  check("Drive dışı bağlantı reddedilir", await waitFor(() => page(`return !!byText("form[aria-label='Yeni bağlantı'] span", "Bu bağlantı eklenemez");`), 2000).catch(() => false));
+  await page(`setValue($("form[aria-label='Yeni bağlantı'] input[inputmode='url']"), "https://drive.google.com/drive/folders/1TestKlasor");`);
   await page(`exact("button", "Bağlantıyı Ekle").click();`);
   const link = await waitFor(() => page(`const a = $$("a", ${kit()}).find((x) => x.href.includes("1TestKlasor")); return a ? { target: a.target, rel: a.rel } : null;`), 3000).catch(() => null);
   check("Drive bağlantısı eklenir, yeni sekmede güvenli açılır", link && link.target === "_blank" && link.rel.includes("noopener") && link.rel.includes("noreferrer"), JSON.stringify(link));
@@ -118,7 +118,7 @@ try {
   await waitFor(() => page(`return !!${kit("b-atlas")};`));
   check("Kılavuzu olmayan markada boş durum ve oluşturma düğmesi", await waitFor(() => page(`return ${kit("b-atlas")}.textContent.includes("Bu marka için henüz marka kılavuzu oluşturulmamış.") && !!exact("button", "Marka Kılavuzu Oluştur");`), 3000).catch(() => false));
   await page(`exact("button", "Marka Kılavuzu Oluştur").click();`);
-  check("Kılavuz oluşturulur; boş bölüm mesajları görünür", await waitFor(() => page(`const t = ${kit("b-atlas")}.textContent; return t.includes("Henüz kurumsal dosya eklenmemiş.") && t.includes("Bu markaya ait Drive bağlantısı bulunmuyor.");`), 3000).catch(() => false));
+  check("Kılavuz oluşturulur; boş bölüm mesajları görünür", await waitFor(() => page(`const t = ${kit("b-atlas")}.textContent; return t.includes("Henüz kurumsal dosya eklenmemiş.") && t.includes("Bu markaya ait dosya bağlantısı bulunmuyor.");`), 3000).catch(() => false));
   check("Markalar arası izolasyon (Sofra Pide verisi görünmez)", await page(`return !${kit("b-atlas")}.textContent.includes("Sofra Pide Kırmızısı");`));
 
   /* ── Görev içinden hızlı erişim ── */

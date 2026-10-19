@@ -34,7 +34,7 @@ import {
 } from "./rbac.js";
 import { assignRecipients, statusRecipients } from "./notifyRules.js";
 import { assigneesOf, isAssignee, peoplePatch, platformsOf, withPeople } from "./taskPeople.js";
-import { BRAND_FILE_TYPES, MAX_UPLOAD_BYTES, TASK_FILE_TYPES, acceptOf, createMemoryFiles } from "./fileUploads.js";
+import { BRAND_FILE_TYPES, MAX_UPLOAD_BYTES, TASK_FILE_TYPES, acceptOf, createMemoryFiles, embedUrlOf, imageUrlOf, isUploadedFile, mimeOf } from "./fileUploads.js";
 import {
   Activity, AlertTriangle, Archive, ArrowDown, ArrowUp, Bold, BookOpen, Calendar, CalendarDays, CalendarRange, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
   Circle, ClipboardCheck, EyeOff, KeyRound, Globe, Megaphone, ClipboardList, Clock, Copy, Download, ExternalLink, Eye, File as FileIcon, FileImage, FileText, Film, Flag, Folder, FolderOpen, HardDrive, Heading, History, ListChecks,
@@ -412,7 +412,7 @@ const DEMO_BRAND_KITS = (() => {
       ],
       assets: [],
       links: [
-        { ...base, id: "kl-1", title: "Sofra Pide — Kurumsal Drive", url: "https://drive.google.com/drive/folders/1Cdg1SPx7Kq", category: "general", description: "Logo dosyaları, kurumsal kimlik belgeleri ve güncel tasarım materyalleri.", visibility: "shared", createdBy: "u1" },
+        { ...base, id: "kl-1", title: "Sofra Pide — Kurumsal Klasör", url: "https://drive.google.com/drive/folders/1Cdg1SPx7Kq", category: "general", description: "Logo dosyaları, kurumsal kimlik belgeleri ve güncel tasarım materyalleri.", visibility: "shared", createdBy: "u1" },
         { ...base, id: "kl-2", title: "Ham çekimler (ekip içi)", url: "https://drive.google.com/drive/folders/1Cdg1SPraw01", category: "media", description: "Kurgu öncesi ham video ve fotoğraflar.", visibility: "internal", createdBy: "u3" },
       ],
     },
@@ -445,11 +445,11 @@ const COMMENT_TEXTS = [
   "Metin için son düzenlemeleri tamamladım.",
   "Müşteri geri bildirimini ekledim: logo daha görünür olmalı.",
   "Yayın saati 19:30 olarak planlandı.",
-  "Revizyon sonrası dosyayı Drive klasörüne yükledim.",
+  "Revizyon sonrası dosyayı klasöre yükledim.",
 ];
 
 function seedDescription(brief, format, brand) {
-  return `<p><strong>Brief:</strong> ${escHtml(brief)}</p><ul><li>Marka kimlik rehberindeki renk ve tipografi kullanılacak.</li><li>${escHtml(format)} türüne uygun ölçüler ve güvenli alanlar kontrol edilecek.</li><li>Yayın öncesi yönetici onayı alınacak.</li></ul><p>Referans: <a href="${DRIVE.folder(brand.driveFolderId)}" target="_blank" rel="noopener noreferrer">${escHtml(brand.name)} Drive klasörü</a></p>`;
+  return `<p><strong>Brief:</strong> ${escHtml(brief)}</p><ul><li>Marka kimlik rehberindeki renk ve tipografi kullanılacak.</li><li>${escHtml(format)} türüne uygun ölçüler ve güvenli alanlar kontrol edilecek.</li><li>Yayın öncesi yönetici onayı alınacak.</li></ul><p>Referans: <a href="${DRIVE.folder(brand.driveFolderId)}" target="_blank" rel="noopener noreferrer">${escHtml(brand.name)} dosya klasörü</a></p>`;
 }
 
 /* Demo kontrol listesi şablonları: tüm markalar için varsayılan + Tepe Emlak'a özel sosyal medya listesi. */
@@ -1365,8 +1365,7 @@ function DateInput({ value, onChange, danger, className = "" }) {
 /* Küçük resim; adres açılamazsa (süresi dolmuş/erişimsiz bağlantı) dosya türü simgesine düşer. */
 function AttachmentThumb({ attachment: a, size = 32, aspect, className = "" }) {
   const [failed, setFailed] = useState(false);
-  const uploaded = useFileHref(a.type === "Görsel" && a.storagePath ? a : null); // yüklenen görselin süreli adresi
-  const src = a.thumbnail || uploaded;
+  const src = a.thumbnail;
   useEffect(() => { setFailed(false); }, [src]);
   if (src && !failed) {
     const box = aspect ? { width: "100%", aspectRatio: aspect } : { width: size, height: size };
@@ -1376,40 +1375,14 @@ function AttachmentThumb({ attachment: a, size = 32, aspect, className = "" }) {
   return <FileTypeTile type={a.type} size={size} />;
 }
 
-/* ───────────────────────── Yüklenen dosyalar (Supabase Storage) ───────────────────────── */
+/* ───────────────────────── Dosya bağlantıları ───────────────────────── */
 
-/* Özel kovadaki dosyalar süreli imzalı adresle açılır; adresler 9 dakika önbellekte tutulur (sunucuda 10 dakika geçerli). */
-const fileUrlCache = new Map(); // depolama yolu → { url, until }
-function useFileUrls(items) {
-  const { filesApi } = useWS();
-  const [, bump] = useState(0);
-  const need = items.filter((i) => i && i.storagePath);
-  const key = need.map((i) => i.storagePath).join("|");
-  useEffect(() => {
-    if (!filesApi || !need.length) return undefined;
-    const now = Date.now();
-    const missing = need.filter((i) => !(fileUrlCache.get(i.storagePath)?.until > now));
-    if (!missing.length) return undefined;
-    let live = true;
-    filesApi.urls(missing).then((map) => {
-      const until = Date.now() + 9 * 60 * 1000;
-      Object.entries(map).forEach(([path, url]) => fileUrlCache.set(path, { url, until }));
-      if (live) bump((n) => n + 1);
-    }).catch(() => {});
-    return () => { live = false; };
-  }, [filesApi, key]); // eslint-disable-line react-hooks/exhaustive-deps
-  return (item) => (item?.storagePath ? fileUrlCache.get(item.storagePath)?.url || "" : "");
-}
-/* Dosyanın açılacağı adres: yüklenen dosyada süreli adres, Drive kaydında Drive bağlantısı. */
-function useFileHref(item) {
-  const urlOf = useFileUrls(item ? [item] : EMPTY);
-  return item?.storagePath ? urlOf(item) : item?.driveUrl || "";
-}
-const openLabel = (item) => (item?.storagePath ? "Dosyayı aç" : "Drive'da aç");
+/* Ek ve marka dosyaları bağlantılı kayıtlardır (panelden yüklenenler dahil); arayüzde depo adı geçmez. */
+const openLabel = () => "Dosyayı aç";
 function FileOpenLink({ item, className, children, label }) {
-  const href = useFileHref(item);
+  const href = item?.driveUrl || "";
   const text = label || `${item?.name || "Dosya"} — ${openLabel(item)}`;
-  if (!href) return <span className={`${className} opacity-40 cursor-wait`} aria-disabled="true" title="Bağlantı hazırlanıyor…">{children}</span>;
+  if (!href) return <span className={`${className} opacity-40`} aria-disabled="true">{children}</span>;
   return <a href={href} target="_blank" rel="noopener noreferrer" className={className} aria-label={text} title={openLabel(item)}>{children}</a>;
 }
 
@@ -1499,7 +1472,7 @@ const attachmentTriggerIcon = (list) => {
 };
 
 function AttachmentList({ attachments, onPreview, contentRef }) {
-  const images = attachments.filter((a) => a.type === "Görsel" && (a.thumbnail || a.storagePath)).slice(0, 3);
+  const images = attachments.filter((a) => a.type === "Görsel" && a.thumbnail).slice(0, 3);
   return (
     <div ref={contentRef}>
       <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1 cw-10 font-semibold uppercase tracking-wide text-slate-400">
@@ -1525,7 +1498,7 @@ function AttachmentList({ attachments, onPreview, contentRef }) {
               </span>
             </button>
             <button type="button" onClick={() => onPreview(a)} className="h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100" aria-label={`${a.name} önizle`} title="Önizle"><Eye size={13} /></button>
-            {(a.driveUrl || a.storagePath) && <FileOpenLink item={a} className="h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-md text-slate-400 hover:text-orange-600 hover:bg-orange-50" label={`${a.name} dosyasını ${a.storagePath ? "aç" : "Drive'da aç"}`}><ExternalLink size={13} /></FileOpenLink>}
+            {a.driveUrl && <FileOpenLink item={a} className="h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-md text-slate-400 hover:text-orange-600 hover:bg-orange-50" label={`${a.name} dosyasını aç`}><ExternalLink size={13} /></FileOpenLink>}
           </li>
         ))}
       </ul>
@@ -2325,14 +2298,10 @@ function ContentTable({ tasks, sort, setSort, defaultBrandId, dueDefault, isVisi
 
 /* ───────────────────────── Marka dosyaları ───────────────────────── */
 
-/* Marka dosyası küçük resmi: Drive kaydında kayıtlı küçük resim, yüklenen görselde süreli adres. */
-/* Tarayıcıda resim olarak gösterilebilen yüklenmiş dosya (SVG <img> içinde betik çalıştırmaz; PSD gösterilemez). */
-const previewableImage = (x) => !!x?.storagePath && /^image\/(png|jpeg|webp|gif|svg\+xml)$/.test(x.mimeType || "");
-const hasThumb = (x) => !!x?.thumbnail || previewableImage(x);
+/* Marka dosyası küçük resmi: kayıttaki küçük resim (panelden yüklenen görsellerde sunucu doldurur). */
+const hasThumb = (x) => !!x?.thumbnail;
 function AssetThumbImg({ asset, className, alt = "" }) {
-  const uploaded = useFileHref(previewableImage(asset) ? asset : null);
-  const src = asset.thumbnail || uploaded;
-  return src ? <img src={src} alt={alt} loading="lazy" className={className} /> : <span className={`${className} bg-slate-100 animate-pulse`} aria-hidden="true" />;
+  return <img src={asset.thumbnail} alt={alt} loading="lazy" className={className} />;
 }
 
 function AssetCard({ asset }) {
@@ -2354,7 +2323,7 @@ function AssetCard({ asset }) {
         </div>
         <div className="flex items-center gap-1 pt-1 mt-auto border-t border-slate-100">
           <button type="button" onClick={() => openPreview("asset", asset.id)} className="flex-1 h-7 inline-flex items-center justify-center gap-1 rounded-md cw-11 font-medium text-slate-600 hover:bg-slate-100"><Eye size={12} />Önizle</button>
-          <FileOpenLink item={asset} className="flex-1 h-7 inline-flex items-center justify-center gap-1 rounded-md cw-11 font-medium text-slate-600 hover:bg-slate-100" label={`${asset.name} — ${openLabel(asset)}`}><ExternalLink size={12} />{asset.storagePath ? "Aç" : "Drive'da Aç"}</FileOpenLink>
+          <FileOpenLink item={asset} className="flex-1 h-7 inline-flex items-center justify-center gap-1 rounded-md cw-11 font-medium text-slate-600 hover:bg-slate-100" label={`${asset.name} — ${openLabel(asset)}`}><ExternalLink size={12} />Aç</FileOpenLink>
           {asset.driveUrl && <button type="button" onClick={() => copyLink(asset.driveUrl)} className="h-7 w-7 inline-flex items-center justify-center rounded-md text-slate-500 hover:bg-slate-100" aria-label="Bağlantıyı Kopyala" title="Bağlantıyı Kopyala"><Copy size={12} /></button>}
         </div>
       </div>
@@ -2376,7 +2345,7 @@ function AssetListRow({ asset, showFolder }) {
       <span className="hidden sm:block"><ApprovalBadge status={asset.approvalStatus} /></span>
       <div className="flex items-center gap-0.5">
         <button type="button" onClick={() => openPreview("asset", asset.id)} className="p-1.5 rounded-md text-slate-400 hover:text-slate-800 hover:bg-slate-100" aria-label="Önizle" title="Önizle"><Eye size={14} /></button>
-        <FileOpenLink item={asset} className="p-1.5 rounded-md text-slate-400 hover:text-orange-600 hover:bg-orange-50" label={asset.storagePath ? `${asset.name} dosyasını aç` : "Drive'da Aç"}><ExternalLink size={14} /></FileOpenLink>
+        <FileOpenLink item={asset} className="p-1.5 rounded-md text-slate-400 hover:text-orange-600 hover:bg-orange-50" label={`${asset.name} dosyasını aç`}><ExternalLink size={14} /></FileOpenLink>
         {asset.driveUrl && <button type="button" onClick={() => copyLink(asset.driveUrl)} className="p-1.5 rounded-md text-slate-400 hover:text-slate-800 hover:bg-slate-100" aria-label="Bağlantıyı Kopyala" title="Bağlantıyı Kopyala"><Copy size={14} /></button>}
       </div>
     </div>
@@ -2385,8 +2354,8 @@ function AssetListRow({ asset, showFolder }) {
 
 function AssetCollection({ assets, view, showFolder, emptyText, onAdd, upload }) {
   if (!assets.length) {
-    const actions = (upload || onAdd) ? <div className="flex flex-wrap justify-center gap-2">{upload}{onAdd && <Btn variant={upload ? "secondary" : "primary"} onClick={onAdd}><LinkIcon size={14} />Drive Bağlantısı Ekle</Btn>}</div> : null;
-    return <EmptyBlock icon={FolderOpen} title={emptyText} text={upload ? "Bilgisayarınızdan dosya yükleyin veya Google Drive bağlantısı ekleyin. Dosyaları bu alana sürükleyip de bırakabilirsiniz." : "Dosyalar Google Drive'da saklanır; buraya yalnızca bağlantısı eklenir."} action={actions} />;
+    const actions = upload ? <div className="flex flex-wrap justify-center gap-2">{upload}</div> : onAdd ? <Btn variant="primary" onClick={onAdd}><LinkIcon size={14} />Bağlantı Ekle</Btn> : null;
+    return <EmptyBlock icon={FolderOpen} title={emptyText} text={upload ? "Bilgisayarınızdan dosya yükleyin. Dosyaları bu alana sürükleyip de bırakabilirsiniz." : "Bu klasörde henüz dosya yok."} action={actions} />;
   }
   if (view === "list") {
     return <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">{assets.map((a) => <AssetListRow key={a.id} asset={a} showFolder={showFolder} />)}</div>;
@@ -2401,7 +2370,7 @@ function BrandFiles({ selectedBrandId, onSelectBrand, folderId, setFolderId, onA
   const [view, setView] = useState("grid");
   const brand = brandsById[selectedBrandId];
   const folder = folderId ? FOLDER_BY_ID[folderId] : null;
-  // Manuel yükleme: dosya yöneticisi izni olanlar (Drive bağlantısı ekleyebilenler); sunucu marka erişimini ayrıca denetler (014).
+  // Manuel yükleme: dosya yöneticisi izni olanlar (bağlantı ekleyebilenler); sunucu (file-upload + RLS) marka erişimini ayrıca denetler.
   const canUpload = !!onAddAsset && !!filesApi && !previewOnly && !!brand;
   const uploads = useUploads(
     (file, opts) => filesApi.uploadAsset(brand.id, folder?.id || null, file, { ...opts, userId: ME }),
@@ -2440,7 +2409,6 @@ function BrandFiles({ selectedBrandId, onSelectBrand, folderId, setFolderId, onA
                     <span className="block cw-11 text-slate-400">{FOLDERS.length} klasör · {count} dosya</span>
                   </span>
                 </button>
-                {b.driveFolderId && <a href={brandDriveLink(b)} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg text-slate-400 hover:text-orange-600 hover:bg-orange-50" aria-label={`${b.name} Drive klasörünü aç`} title="Drive'da Aç"><ExternalLink size={15} /></a>}
               </div>
             );
           })}
@@ -2451,7 +2419,6 @@ function BrandFiles({ selectedBrandId, onSelectBrand, folderId, setFolderId, onA
 
   const folderAssets = folder ? brandAssets.filter((a) => a.folderId === folder.id).filter(filterAsset) : [];
   const searchResults = !folder && (q || approval !== "all") ? brandAssets.filter(filterAsset) : null;
-  const driveLink = brandDriveLink(brand);
 
   return (
     <div {...dropProps} data-brand-files="" className={`relative space-y-4 rounded-xl ${dropping ? "ring-2 ring-orange-400 ring-offset-4 bg-orange-50/50" : ""}`}>
@@ -2459,8 +2426,7 @@ function BrandFiles({ selectedBrandId, onSelectBrand, folderId, setFolderId, onA
       <div className="flex flex-wrap items-center justify-between gap-3">
         {crumbs}
         <div className="flex flex-wrap items-center gap-2">
-          {driveLink && <a href={driveLink} target="_blank" rel="noopener noreferrer" className="h-8 inline-flex items-center gap-1.5 px-2.5 rounded-lg border border-slate-200 bg-white cw-12 font-semibold text-slate-700 hover:bg-slate-50"><ExternalLink size={13} />Drive'da Aç</a>}
-          {onAddAsset && <Btn size="sm" variant={canUpload ? "secondary" : "primary"} onClick={() => onAddAsset(folder ? folder.id : "gorseller")}><LinkIcon size={13} />Drive Bağlantısı Ekle</Btn>}
+          {onAddAsset && !canUpload && <Btn size="sm" variant="primary" onClick={() => onAddAsset(folder ? folder.id : "gorseller")}><LinkIcon size={13} />Bağlantı Ekle</Btn>}
           {uploadBtn("primary")}
         </div>
       </div>
@@ -2665,7 +2631,7 @@ function RichTextEditor({ value, onChange, onCommit, docKey, readOnly, allowImag
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); if (mode === "link") applyLink(); else insertImage(normalizeUrl(url)); } if (e.key === "Escape") { e.stopPropagation(); setMode(null); } }}
-            placeholder={mode === "link" ? "Bağlantı adresi (örn. drive.google.com/…)" : "Görsel adresi (https://…)"}
+            placeholder={mode === "link" ? "Bağlantı adresi (https://…)" : "Görsel adresi (https://…)"}
             aria-label={mode === "link" ? "Bağlantı adresi" : "Görsel adresi"}
             className="flex-1 min-w-40 h-8 rounded-md border border-slate-200 bg-white px-2.5 cw-12 outline-none focus:border-orange-400"
           />
@@ -2718,7 +2684,7 @@ function PropertyRow({ icon: Icon, label, children }) {
 function AttachmentsSection({ task }) {
   const { state, dispatch, attachmentsByTask, openPreview, notify, can: allowed, filesApi, previewOnly } = useWS();
   const canEdit = allowed("canEditContent");
-  const canUpload = canEdit && !!filesApi && !previewOnly; // sunucu ayrıca görev erişimini denetler (014)
+  const canUpload = canEdit && !!filesApi && !previewOnly; // sunucu (file-upload + RLS) görev erişimini ayrıca denetler
   const [mode, setMode] = useState(null);
   const [q, setQ] = useState("");
   const [name, setName] = useState("");
@@ -2727,7 +2693,6 @@ function AttachmentsSection({ task }) {
   const [internal, setInternal] = useState(false);
   const items = attachmentsByTask[task.id] || EMPTY;
   const attachedAssetIds = new Set(items.map((a) => a.assetId).filter(Boolean));
-  // Yüklenen marka dosyaları göreve bağlantı olarak eklenemez (dosya marka kovasında); onlar göreve doğrudan yüklenir.
   const brandAssets = state.assets.filter((a) => a.brandId === task.brandId && a.driveUrl && (!q || norm(a.name).includes(norm(q))));
   const uploads = useUploads(
     (file, opts) => filesApi.uploadAttachment(task, file, { ...opts, internal, userId: ME }),
@@ -2743,12 +2708,12 @@ function AttachmentsSection({ task }) {
   };
   const addLink = () => {
     if (!name.trim()) { setErr("Dosya adı zorunludur."); return; }
-    if (!DRIVE.isValid(link)) { setErr("Geçerli bir Google Drive bağlantısı girin."); return; }
+    if (!DRIVE.isValid(link)) { setErr("Geçerli bir dosya bağlantısı girin."); return; }
     const lower = name.toLocaleLowerCase("tr-TR");
     const type = /\.(png|jpe?g|webp|gif)$/.test(lower) ? "Görsel" : /\.pdf$/.test(lower) ? "PDF" : /\.(mp4|mov)$/.test(lower) ? "Video" : "Doküman";
-    if (!dispatch({ type: "ADD_ATTACHMENT", attachment: { id: uid(), taskId: task.id, assetId: null, name: name.trim(), type, size: "Drive", thumbnail: null, driveUrl: link.trim(), addedBy: ME, createdAt: new Date().toISOString(), internal } })) return;
+    if (!dispatch({ type: "ADD_ATTACHMENT", attachment: { id: uid(), taskId: task.id, assetId: null, name: name.trim(), type, size: "Bağlantı", thumbnail: null, driveUrl: link.trim(), addedBy: ME, createdAt: new Date().toISOString(), internal } })) return;
     setName(""); setLink(""); setErr(""); setMode(null);
-    notify("Drive bağlantısı göreve eklendi.");
+    notify("Bağlantı göreve eklendi.");
   };
   return (
     <section {...dropProps} data-attachments="" className={`relative rounded-xl transition-colors ${dropping ? "ring-2 ring-orange-400 ring-offset-4 bg-orange-50/60" : ""}`}>
@@ -2757,7 +2722,7 @@ function AttachmentsSection({ task }) {
         <div className="flex flex-wrap justify-end gap-1">
           {canUpload && <UploadTrigger accept={acceptOf(TASK_FILE_TYPES)} onFiles={uploads.add} variant="primary" name="attachments" />}
           <Btn size="sm" variant={mode === "assets" ? "primary" : "secondary"} onClick={() => setMode(mode === "assets" ? null : "assets")}><FolderOpen size={13} />Marka Dosyalarından</Btn>
-          <Btn size="sm" variant={mode === "link" ? "primary" : "secondary"} onClick={() => setMode(mode === "link" ? null : "link")}><LinkIcon size={13} />Bağlantı</Btn>
+          {!canUpload && <Btn size="sm" variant={mode === "link" ? "primary" : "secondary"} onClick={() => setMode(mode === "link" ? null : "link")}><LinkIcon size={13} />Bağlantı</Btn>}
         </div>
       }>Ekler ({items.length})</SectionTitle>
 
@@ -2794,7 +2759,7 @@ function AttachmentsSection({ task }) {
       {mode === "link" && (
         <div className="mb-3 p-3 border border-slate-200 rounded-xl bg-slate-50 space-y-2">
           <input value={name} onChange={(e) => { setName(e.target.value); setErr(""); }} placeholder="Dosya adı (örn. Final Kurgu.mp4)" aria-label="Dosya adı" className="w-full h-8 rounded-md border border-slate-200 bg-white px-2.5 cw-12 outline-none focus:border-orange-400" />
-          <input value={link} onChange={(e) => { setLink(e.target.value); setErr(""); }} placeholder="https://drive.google.com/file/d/…" aria-label="Drive bağlantısı" className="w-full h-8 rounded-md border border-slate-200 bg-white px-2.5 cw-12 outline-none focus:border-orange-400" />
+          <input value={link} onChange={(e) => { setLink(e.target.value); setErr(""); }} placeholder="Dosya bağlantısı (https://…)" aria-label="Dosya bağlantısı" className="w-full h-8 rounded-md border border-slate-200 bg-white px-2.5 cw-12 outline-none focus:border-orange-400" />
           {err && <p className="cw-11 text-red-600">{err}</p>}
           <div className="flex justify-end gap-2"><Btn size="sm" variant="ghost" onClick={() => setMode(null)}>Vazgeç</Btn><Btn size="sm" variant="primary" onClick={addLink}>Ekle</Btn></div>
         </div>
@@ -2812,7 +2777,7 @@ function AttachmentsSection({ task }) {
                 <p className="flex items-center gap-1 cw-10 text-slate-400">{a.type} · {a.size}{a.internal && <span className="inline-flex items-center gap-0.5 text-slate-500 font-semibold" title="Müşteri bu eki görmez"><Lock size={9} />Ekip içi</span>}</p>
               </div>
               <div className="flex items-center">
-                <FileOpenLink item={a} className="p-1.5 rounded-md text-slate-400 hover:text-orange-600 hover:bg-orange-50" label={a.storagePath ? `${a.name} dosyasını aç` : "Drive'da Aç"}><ExternalLink size={13} /></FileOpenLink>
+                <FileOpenLink item={a} className="p-1.5 rounded-md text-slate-400 hover:text-orange-600 hover:bg-orange-50" label={`${a.name} dosyasını aç`}><ExternalLink size={13} /></FileOpenLink>
                 {canEdit && <button type="button" onClick={() => { if (dispatch({ type: "REMOVE_ATTACHMENT", id: a.id })) notify("Ek kaldırıldı."); }} className="p-1.5 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50" aria-label={`${a.name} ekini kaldır`} title="Kaldır"><X size={13} /></button>}
               </div>
             </div>
@@ -3934,27 +3899,26 @@ function ConfirmDeleteModal({ task, onClose, onConfirm }) {
   );
 }
 
-/* Drive dosya bağlantısı → gömülebilir önizleme adresi (yalnızca /file/d/<id>/ biçimi). */
-const drivePreviewUrl = (url) => { const m = String(url || "").match(/^https:\/\/drive\.google\.com\/file\/d\/([\w-]+)/); return m ? `https://drive.google.com/file/d/${m[1]}/preview` : null; };
+/* Bağlantı → gömülebilir önizleme adresi (yalnızca /file/d/<id>/ biçimi). */
+const drivePreviewUrl = (url) => (/^https:\/\/drive\.google\.com\/file\/d\/[\w-]+/.test(String(url || "")) ? embedUrlOf({ driveUrl: url }) : null);
 
 function FilePreviewModal({ kind, id, onClose }) {
   const { state, dispatch, brandsById, copyLink, notify, can: allowed } = useWS();
   const [embed, setEmbed] = useState(false);
   const item = kind === "asset" ? state.assets.find((a) => a.id === id) : state.attachments.find((a) => a.id === id);
-  const fileHref = useFileHref(item?.storagePath ? item : null);
   if (!item) return null;
-  if (item.storagePath) return <UploadedFilePreview kind={kind} item={item} href={fileHref} onClose={onClose} />;
+  if (isUploadedFile(item)) return <UploadedFilePreview kind={kind} item={item} href={item.driveUrl} onClose={onClose} />;
   const embedUrl = drivePreviewUrl(item.driveUrl);
   const task = kind === "attachment" ? state.tasks.find((t) => t.id === item.taskId) : null;
   const rows = kind === "asset"
     ? [["Marka", brandsById[item.brandId]?.name], ["Klasör", FOLDER_BY_ID[item.folderId]?.name], ["Tür", item.type], ["Boyut", item.size], ["Sahibi", USER_BY_ID[item.owner]?.name], ["Güncellenme", fmtDateLong(item.updatedAt)]]
     : [["Görev", task?.title || "—"], ["Tür", item.type], ["Boyut", item.size], ["Ekleyen", USER_BY_ID[item.addedBy]?.name], ["Eklenme", fmtDateTime(item.createdAt)], ["Görünürlük", item.internal ? "Yalnızca ekip" : "Ekip ve müşteri"]];
   return (
-    <Modal title={item.name} subtitle={kind === "asset" ? "Marka dosyası · Google Drive" : "Görev eki · Google Drive"} onClose={onClose} width={720}
+    <Modal title={item.name} subtitle={kind === "asset" ? "Marka dosyası" : "Görev eki"} onClose={onClose} width={720}
       footer={
         <>
           <Btn variant="secondary" onClick={() => copyLink(item.driveUrl)}><Copy size={14} />Bağlantıyı Kopyala</Btn>
-          <a href={item.driveUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg bg-orange-600 text-white cw-13 font-semibold hover:bg-orange-700"><ExternalLink size={14} />Drive'da Aç</a>
+          <a href={item.driveUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg bg-orange-600 text-white cw-13 font-semibold hover:bg-orange-700"><ExternalLink size={14} />Dosyayı Aç</a>
         </>
       }>
       <div className="grid gap-5 md:grid-cols-5">
@@ -3964,8 +3928,8 @@ function FilePreviewModal({ kind, id, onClose }) {
           ) : item.thumbnail ? <PreviewImage item={item} /> : (
             <div className="flex flex-col items-center gap-3 py-10 px-4 text-center">
               <FileTypeTile type={item.type} size={64} />
-              <p className="cw-12 text-slate-500">{embedUrl ? "Dosyayı burada Drive önizlemesiyle görüntüleyebilirsiniz." : "Bu dosya türü için önizleme Drive üzerinde açılır."}</p>
-              {embedUrl && <Btn size="sm" variant="secondary" onClick={() => setEmbed(true)}><Eye size={13} />Drive önizlemesini göster</Btn>}
+              <p className="cw-12 text-slate-500">{embedUrl ? "Dosyayı burada önizleyebilirsiniz." : "Bu dosya türü için önizleme “Dosyayı Aç” ile yeni sekmede açılır."}</p>
+              {embedUrl && <Btn size="sm" variant="secondary" onClick={() => setEmbed(true)}><Eye size={13} />Önizlemeyi göster</Btn>}
             </div>
           )}
         </div>
@@ -3992,9 +3956,9 @@ function FilePreviewModal({ kind, id, onClose }) {
             </div>
           )}
           <div className="pt-3 border-t border-slate-100">
-            <p className="cw-12 text-slate-500 mb-1.5">Drive Bağlantısı</p>
+            <p className="cw-12 text-slate-500 mb-1.5">Dosya Bağlantısı</p>
             <div className="flex items-center gap-1.5">
-              <input readOnly value={item.driveUrl} onFocus={(e) => e.target.select()} aria-label="Drive bağlantısı" className="flex-1 min-w-0 h-8 rounded-md border border-slate-200 bg-slate-50 px-2 cw-11 text-slate-600 outline-none" />
+              <input readOnly value={item.driveUrl} onFocus={(e) => e.target.select()} aria-label="Dosya bağlantısı" className="flex-1 min-w-0 h-8 rounded-md border border-slate-200 bg-slate-50 px-2 cw-11 text-slate-600 outline-none" />
               <button type="button" onClick={() => copyLink(item.driveUrl)} className="h-8 w-8 flex items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50" aria-label="Bağlantıyı Kopyala"><Copy size={13} /></button>
             </div>
           </div>
@@ -4004,28 +3968,28 @@ function FilePreviewModal({ kind, id, onClose }) {
   );
 }
 
-/* Yüklenen dosyanın önizlemesi: görsel, video oynatıcı veya PDF görüntüleyici; açma ve indirme süreli adresle. */
+/* Panelden yüklenen dosyanın önizlemesi: görsel, video veya PDF (gömülü görüntüleyici); indirme kayıttaki bağlantıyla. */
 function UploadedFilePreview({ kind, item, href, onClose }) {
-  const { state, dispatch, brandsById, notify, can: allowed } = useWS();
+  const { state, dispatch, brandsById, notify, copyLink, can: allowed } = useWS();
   const task = kind === "attachment" ? state.tasks.find((t) => t.id === item.taskId) : null;
   const rows = kind === "asset"
     ? [["Marka", brandsById[item.brandId]?.name], ["Klasör", FOLDER_BY_ID[item.folderId]?.name], ["Tür", item.type], ["Boyut", item.size], ["Yükleyen", USER_BY_ID[item.owner]?.name], ["Güncellenme", fmtDateLong(item.updatedAt)]]
     : [["Görev", task?.title || "—"], ["Tür", item.type], ["Boyut", item.size], ["Yükleyen", USER_BY_ID[item.addedBy]?.name], ["Yüklenme", fmtDateTime(item.createdAt)], ["Görünürlük", item.internal ? "Yalnızca ekip" : "Ekip ve müşteri"]];
-  const mime = item.mimeType || "";
+  const mime = mimeOf(item);
+  const embed = embedUrlOf(item);
   let body;
-  if (!href) body = <p className="py-16 cw-12 text-slate-400" role="status">Dosya hazırlanıyor…</p>;
-  else if (previewableImage(item)) body = <img src={href} alt={item.name} className="w-full h-full object-contain" style={{ maxHeight: 420 }} />;
-  else if (mime.startsWith("video/")) body = <video src={href} controls preload="metadata" className="w-full bg-black" style={{ maxHeight: 420 }} aria-label={`${item.name} videosu`} />;
-  else if (mime === "application/pdf") body = <iframe src={href} title={`${item.name} önizlemesi`} className="w-full border-0 bg-white" style={{ height: 420 }} />;
+  // SVG ve PSD için küçük resim yok (SVG kayıtta "Vektör" türündedir); onlar indirilerek açılır.
+  if (item.type === "Görsel" && item.thumbnail) body = <img src={imageUrlOf(item)} alt={item.name} className="w-full h-full object-contain" style={{ maxHeight: 420 }} />;
+  else if (embed && (mime.startsWith("video/") || mime === "application/pdf")) body = <iframe src={embed} title={`${item.name} önizlemesi`} className="w-full border-0 bg-white" style={{ height: 420 }} allow="autoplay" />;
   else body = <div className="flex flex-col items-center gap-3 py-10 px-4 text-center"><FileTypeTile type={item.type} size={64} /><p className="cw-12 text-slate-500">Bu dosya türü tarayıcıda önizlenemez. İndirip açabilirsiniz.</p></div>;
   return (
     <Modal title={item.name} subtitle={kind === "asset" ? "Marka dosyası · Yüklenen dosya" : "Görev eki · Yüklenen dosya"} onClose={onClose} width={760}
-      footer={href ? (
+      footer={
         <>
-          <a href={href} download={item.name} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg border border-slate-200 bg-white text-slate-700 cw-13 font-semibold hover:bg-slate-50"><Download size={14} />İndir</a>
-          <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg bg-orange-600 text-white cw-13 font-semibold hover:bg-orange-700"><ExternalLink size={14} />Yeni Sekmede Aç</a>
+          <Btn variant="secondary" onClick={() => copyLink(href)}><Copy size={14} />Bağlantıyı Kopyala</Btn>
+          <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg bg-orange-600 text-white cw-13 font-semibold hover:bg-orange-700"><Download size={14} />İndir</a>
         </>
-      ) : null}>
+      }>
       <div className="grid gap-5 md:grid-cols-5" data-uploaded-preview={mime}>
         <div className="md:col-span-3 rounded-xl border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center" style={{ minHeight: 220 }}>{body}</div>
         <div className="md:col-span-2 space-y-3">
@@ -4047,7 +4011,7 @@ function UploadedFilePreview({ kind, item, href, onClose }) {
               </div>
             </div>
           ) : kind === "asset" ? <div className="pt-3 border-t border-slate-100 flex items-center justify-between cw-12"><span className="text-slate-500">Onay Durumu</span><ApprovalBadge status={item.approvalStatus} /></div> : null}
-          <p className="pt-3 border-t border-slate-100 cw-11 text-slate-400">Dosya panelin güvenli deposunda saklanır; bağlantılar yalnızca yetkili kişilere ve kısa süreliğine açılır.</p>
+          <p className="pt-3 border-t border-slate-100 cw-11 text-slate-400">Panelde bu dosyayı yalnızca yetkili kişiler görür; ancak bağlantıya sahip olan herkes dosyayı açabilir. Bağlantıyı yalnızca ilgili kişilerle paylaşın.</p>
         </div>
       </div>
     </Modal>
@@ -4056,7 +4020,7 @@ function UploadedFilePreview({ kind, item, href, onClose }) {
 
 function PreviewImage({ item }) {
   const [failed, setFailed] = useState(false);
-  if (failed) return <div className="flex flex-col items-center gap-3 py-10"><FileTypeTile type={item.type} size={64} /><p className="cw-12 text-slate-500">Küçük resim yüklenemedi. Dosyayı Drive'da açabilirsiniz.</p></div>;
+  if (failed) return <div className="flex flex-col items-center gap-3 py-10"><FileTypeTile type={item.type} size={64} /><p className="cw-12 text-slate-500">Küçük resim yüklenemedi. “Dosyayı Aç” ile açabilirsiniz.</p></div>;
   return <img src={item.thumbnail} alt={item.name} onError={() => setFailed(true)} className="w-full h-full object-contain" />;
 }
 
@@ -4069,22 +4033,22 @@ function AddAssetModal({ brandId, folderId, onClose, onSave }) {
     e.preventDefault();
     const next = {};
     if (!form.name.trim()) next.name = "Dosya adı zorunludur.";
-    if (!DRIVE.isValid(form.url)) next.url = "Bağlantı drive.google.com veya docs.google.com ile başlamalıdır.";
+    if (!DRIVE.isValid(form.url)) next.url = "Geçerli bir dosya bağlantısı girin.";
     setErrors(next);
     if (Object.keys(next).length) return;
     const brand = state.brands.find((b) => b.id === form.brandId);
     onSave({
       id: uid(), brandId: form.brandId, folderId: form.folderId, name: form.name.trim(), type: form.type,
       thumbnail: form.type === "Görsel" ? makeThumb(BRAND_COLORS[brand.color].hex, form.name.trim().slice(0, 16)) : null,
-      driveFileId: null, driveUrl: form.url.trim(), size: form.size.trim() || "Drive", owner: ME, approvalStatus: "Onay Bekliyor", updatedAt: TODAY,
+      driveFileId: null, driveUrl: form.url.trim(), size: form.size.trim() || "Bağlantı", owner: ME, approvalStatus: "Onay Bekliyor", updatedAt: TODAY,
     });
   };
   return (
-    <Modal title="Drive Bağlantısı Ekle" subtitle="Dosya Google Drive'da kalır; çalışma alanına yalnızca meta veri ve bağlantı eklenir." onClose={onClose} width={560}
+    <Modal title="Bağlantı Ekle" subtitle="Çalışma alanına dosyanın yalnızca bilgisi ve bağlantısı eklenir." onClose={onClose} width={560}
       footer={<><Btn variant="secondary" onClick={onClose}>İptal</Btn><Btn variant="primary" type="submit" form="cw-add-asset"><LinkIcon size={14} />Bağlantıyı Ekle</Btn></>}>
       <form id="cw-add-asset" onSubmit={submit} noValidate className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
         <Field label="Dosya Adı" error={errors.name} full><input autoFocus value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="Örn. Kasım Kampanya Görseli.jpg" className={inputCls(errors.name)} /></Field>
-        <Field label="Drive Bağlantısı" error={errors.url} full><input value={form.url} onChange={(e) => set("url", e.target.value)} placeholder="https://drive.google.com/file/d/…" className={inputCls(errors.url)} /></Field>
+        <Field label="Dosya Bağlantısı" error={errors.url} full><input value={form.url} onChange={(e) => set("url", e.target.value)} placeholder="https://…" className={inputCls(errors.url)} /></Field>
         <Field label="Marka"><select value={form.brandId} onChange={(e) => set("brandId", e.target.value)} className={inputCls()}>{state.brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></Field>
         <Field label="Klasör"><select value={form.folderId} onChange={(e) => set("folderId", e.target.value)} className={inputCls()}>{FOLDERS.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></Field>
         <Field label="Dosya Türü"><select value={form.type} onChange={(e) => set("type", e.target.value)} className={inputCls()}>{FILE_TYPE_KEYS.map((t) => <option key={t}>{t}</option>)}</select></Field>
@@ -4107,16 +4071,16 @@ function NewBrandModal({ onClose, onSave }) {
     if (!name.trim()) { setError("Marka adı zorunludur."); return; }
     if (state.brands.some((b) => norm(b.name) === norm(name))) { setError("Bu isimde bir marka zaten var."); return; }
     const folderId = driveUrl.trim() ? parseDriveFolderId(driveUrl) : null;
-    if (driveUrl.trim() && (!DRIVE.isValid(driveUrl) || !folderId)) { setDriveError("Geçerli bir Google Drive klasör bağlantısı girin (…/drive/folders/…)."); return; }
+    if (driveUrl.trim() && (!DRIVE.isValid(driveUrl) || !folderId)) { setDriveError("Geçerli bir klasör bağlantısı girin (…/folders/…)."); return; }
     onSave(makeBrand(name, sector.trim(), color, folderId));
   };
   return (
-    <Modal title="Yeni Marka" subtitle="Markanın Google Drive klasör bağlantısını isteğe bağlı olarak ekleyebilirsiniz." onClose={onClose} width={460}
+    <Modal title="Yeni Marka" subtitle="Dosya klasörü boş bırakılırsa ilk yüklemede otomatik oluşturulur." onClose={onClose} width={460}
       footer={<><Btn variant="secondary" onClick={onClose}>İptal</Btn><Btn variant="primary" type="submit" form="cw-new-brand"><Plus size={14} />Markayı Oluştur</Btn></>}>
       <form id="cw-new-brand" onSubmit={submit} noValidate className="space-y-3.5">
         <Field label="Marka Adı" error={error}><input autoFocus value={name} onChange={(e) => { setName(e.target.value); setError(""); }} placeholder="Örn. Lumina Kozmetik" className={inputCls(error)} /></Field>
         <Field label="Sektör"><input value={sector} onChange={(e) => setSector(e.target.value)} placeholder="Örn. Kozmetik" className={inputCls()} /></Field>
-        <Field label="Drive Klasörü (isteğe bağlı)" error={driveError}><input value={driveUrl} onChange={(e) => { setDriveUrl(e.target.value); setDriveError(""); }} placeholder="https://drive.google.com/drive/folders/…" className={inputCls(driveError)} /></Field>
+        <Field label="Dosya Klasörü (isteğe bağlı)" error={driveError}><input value={driveUrl} onChange={(e) => { setDriveUrl(e.target.value); setDriveError(""); }} placeholder="Klasör bağlantısı (…/folders/…)" className={inputCls(driveError)} /></Field>
         <div>
           <p className="cw-12 font-semibold text-slate-700 mb-1.5">Renk</p>
           <div className="flex flex-wrap gap-2">
@@ -5205,7 +5169,7 @@ function BrandEditModal({ brand, onClose }) {
     if (!form.name.trim()) next.name = "Marka adı zorunludur.";
     else if (state.allBrands.some((b) => b.id !== brand.id && norm(b.name) === norm(form.name))) next.name = "Bu isimde bir marka zaten var.";
     const folderId = form.driveUrl.trim() ? parseDriveFolderId(form.driveUrl) : null;
-    if (form.driveUrl.trim() && (!DRIVE.isValid(form.driveUrl) || !folderId)) next.driveUrl = "Geçerli bir Google Drive klasör bağlantısı girin.";
+    if (form.driveUrl.trim() && (!DRIVE.isValid(form.driveUrl) || !folderId)) next.driveUrl = "Geçerli bir klasör bağlantısı girin (…/folders/…).";
     setErrors(next);
     if (Object.keys(next).length) return;
     const initials = makeBrand(form.name, "", form.color).initials;
@@ -5220,7 +5184,7 @@ function BrandEditModal({ brand, onClose }) {
       <form id="cw-brand-edit" onSubmit={submit} noValidate className="space-y-3.5">
         <Field label="Marka Adı" error={errors.name}><input autoFocus value={form.name} onChange={(e) => set("name", e.target.value)} className={inputCls(errors.name)} /></Field>
         <Field label="Sektör"><input value={form.sector} onChange={(e) => set("sector", e.target.value)} className={inputCls()} /></Field>
-        <Field label="Drive Klasörü (isteğe bağlı)" error={errors.driveUrl}><input value={form.driveUrl} onChange={(e) => set("driveUrl", e.target.value)} placeholder="https://drive.google.com/drive/folders/…" className={inputCls(errors.driveUrl)} /></Field>
+        <Field label="Dosya Klasörü (isteğe bağlı)" error={errors.driveUrl}><input value={form.driveUrl} onChange={(e) => set("driveUrl", e.target.value)} placeholder="Klasör bağlantısı (…/folders/…)" className={inputCls(errors.driveUrl)} /></Field>
         <Field label="Durum"><select value={form.status} onChange={(e) => set("status", e.target.value)} className={inputCls()}><option value="active">Aktif</option><option value="paused">Pasif</option></select></Field>
         <div>
           <p className="cw-12 font-semibold text-slate-700 mb-1.5">Renk</p>
@@ -6842,14 +6806,14 @@ function LinkForm({ kit, link, onDone }) {
     setErrors(err);
     if (Object.keys(err).length) return;
     setSaving(true);
-    try { await kit.save("links", { id: link?.id || uid(), title: v.title.trim(), url: u.url, category: v.category, description: v.description.trim(), visibility: v.visibility }, link ? "Bağlantı güncellendi." : "Drive bağlantısı eklendi."); discard(); onDone(); }
+    try { await kit.save("links", { id: link?.id || uid(), title: v.title.trim(), url: u.url, category: v.category, description: v.description.trim(), visibility: v.visibility }, link ? "Bağlantı güncellendi." : "Bağlantı eklendi."); discard(); onDone(); }
     catch { setSaving(false); }
   };
   return (
-    <form onSubmit={submit} noValidate className={kitFormCls} aria-label={link ? "Bağlantıyı düzenle" : "Yeni Drive bağlantısı"}>
+    <form onSubmit={submit} noValidate className={kitFormCls} aria-label={link ? "Bağlantıyı düzenle" : "Yeni bağlantı"}>
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Bağlantı Başlığı" error={errors.title}><input autoFocus value={v.title} onChange={(e) => set("title", e.target.value)} maxLength={120} placeholder="örn. Kurumsal Drive" className={inputCls(errors.title)} /></Field>
-        <Field label="Google Drive URL" error={errors.url}><input value={v.url} onChange={(e) => set("url", e.target.value)} placeholder="https://drive.google.com/drive/folders/…" inputMode="url" className={inputCls(errors.url)} /></Field>
+        <Field label="Bağlantı Başlığı" error={errors.title}><input autoFocus value={v.title} onChange={(e) => set("title", e.target.value)} maxLength={120} placeholder="örn. Kurumsal Klasör" className={inputCls(errors.title)} /></Field>
+        <Field label="Bağlantı Adresi" error={errors.url}><input value={v.url} onChange={(e) => set("url", e.target.value)} placeholder="https://…" inputMode="url" className={inputCls(errors.url)} /></Field>
         <Field label="Kategori"><select value={v.category} onChange={(e) => set("category", e.target.value)} className={inputCls()}>{Object.entries(LINK_CATEGORIES).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
         <Field label="Görünürlük"><select value={v.visibility} onChange={(e) => set("visibility", e.target.value)} className={inputCls()}>{Object.entries(VISIBILITY).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
         <Field label="Açıklama" full><input value={v.description} onChange={(e) => set("description", e.target.value)} maxLength={500} placeholder="örn. Logo dosyaları ve güncel tasarım materyalleri" className={inputCls()} /></Field>
@@ -6869,8 +6833,8 @@ function DriveLinkRow({ link, actions, compact }) {
         {!compact && link.description && <p className="cw-12 text-slate-600 mt-0.5">{link.description}</p>}
       </div>
       <div className="shrink-0 flex items-center gap-0.5">
-        <a href={link.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-slate-200 cw-12 font-semibold text-slate-700 hover:bg-slate-50 hover:border-slate-300" aria-label={`${link.title}: Drive'da aç (yeni sekme)`}>
-          <ExternalLink size={13} /><span className={compact ? "sr-only sm:not-sr-only" : ""}>Drive'da Aç</span>
+        <a href={link.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-slate-200 cw-12 font-semibold text-slate-700 hover:bg-slate-50 hover:border-slate-300" aria-label={`${link.title}: aç (yeni sekme)`}>
+          <ExternalLink size={13} /><span className={compact ? "sr-only sm:not-sr-only" : ""}>Aç</span>
         </a>
         {actions}
       </div>
@@ -6882,8 +6846,8 @@ function LinksSection({ kit }) {
   const [editing, setEditing] = usePersisted(`${kit.brandId}:links:editing`, null);
   const links = kit.data.links;
   return (
-    <KitSection id={`kit-links-${kit.brandId}`} icon={HardDrive} title="Google Drive Bağlantıları" count={links.length}
-      description="Bağlantılar yeni sekmede açılır. Dosyalara erişim Drive'daki paylaşım ayarlarına bağlıdır."
+    <KitSection id={`kit-links-${kit.brandId}`} icon={HardDrive} title="Dosya Bağlantıları" count={links.length}
+      description="Bağlantılar yeni sekmede açılır. Dosyalara erişim, bağlantının paylaşım ayarlarına bağlıdır."
       action={kit.canEdit && editing !== "new" && <Btn size="sm" variant="secondary" onClick={() => setEditing("new")}><Plus size={13} />Bağlantı Ekle</Btn>}>
       {editing === "new" && <div className="mb-3"><LinkForm kit={kit} onDone={() => setEditing(null)} /></div>}
       {links.length ? (
@@ -6896,7 +6860,7 @@ function LinksSection({ kit }) {
             </li>
           ))}
         </ul>
-      ) : editing !== "new" && <KitEmpty>Bu markaya ait Drive bağlantısı bulunmuyor.</KitEmpty>}
+      ) : editing !== "new" && <KitEmpty>Bu markaya ait dosya bağlantısı bulunmuyor.</KitEmpty>}
     </KitSection>
   );
 }
@@ -7875,7 +7839,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
     brandKitStore: brandKit,
     checklistApi: checklistsOn ? checklistApi : null, checklistIndex, ensureChecklist, submitTask,
     contentApi: state.features?.approvals ? contentApi : null,
-    // Dosya yükleme (014): Storage kovaları yoksa düğmeler gizlenir, Drive bağlantıları çalışmaya devam eder.
+    // Dosya yükleme (file-upload Edge Function); kaynak yükleme sunmuyorsa düğmeler gizlenir, bağlantı ekleme kalır.
     filesApi: filesApi && filesApi.available ? filesApi : null,
     // Yalnızca kendi oturumunda (önizleme değil) — sunucu ayrıca yönetici yetkisini denetler.
     userApi: actor.id === realUserId ? userApi : null,
@@ -8133,7 +8097,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
               setAssetModal(null);
               if (asset.brandId !== selectedBrandId) setSelectedBrandId(asset.brandId);
               setFolderId(asset.folderId);
-              notify("Drive bağlantısı marka dosyalarına eklendi.");
+              notify("Bağlantı marka dosyalarına eklendi.");
             }}
           />
         )}

@@ -1,18 +1,19 @@
 /*
- * AgencyOS — Görev ekleri ve marka dosyaları için doğrudan dosya yükleme (Supabase Storage)
+ * AgencyOS — Görev ekleri ve marka dosyaları için doğrudan dosya yükleme
  *
- *   Görev eki    → "task-files" kovası,  yol: <görev id>/<dosya id>.<uzantı>   (görsel, video, PDF)
- *   Marka dosyası → "brand-files" kovası, yol: <marka id>/<dosya id>.<uzantı>  (görsel, vektör, video, PDF, font, arşiv, ofis)
+ *   Dosya tarayıcıdan "file-upload" Edge Function'ına gönderilir; fonksiyon dosyayı Google Drive'da (hizmet hesabı)
+ *   markanın klasörüne yükler, bağlantıyla paylaşır ve kaydı (attachments / assets, drive_url = webContentLink)
+ *   çağıranın yetkisiyle ekler. Panel kayıt biçimi değişmez: yüklenen dosya da bağlantılı bir kayıttır.
  *
- * Kovalar özeldir (herkese açık adres yoktur); dosyalar süreli imzalı adreslerle açılır. Erişim kuralları
- * supabase/014_file_uploads.sql'de görev / marka kayıtlarının kurallarıyla aynıdır. Uzantı listeleri kovaların
- * MIME listeleriyle aynıdır: liste dışı (ör. HTML, çalıştırılabilir) dosya istemcide de sunucuda da reddedilir.
+ *   Görev eki    → <marka klasörü>/Görev Ekleri          (görsel, video, PDF)
+ *   Marka dosyası → <marka klasörü>/<panel klasörü adı>   (görsel, vektör, video, PDF, font, arşiv, ofis)
+ *
+ * Uzantı listeleri supabase/functions/file-upload ile aynıdır: liste dışı (ör. HTML, çalıştırılabilir) dosya istemcide
+ * de sunucuda da reddedilir. Arayüz metinlerinde depo adı geçmez ("Dosya Yükle", "Dosyayı Aç").
  */
 
-export const TASK_FILES_BUCKET = "task-files";
-export const BRAND_FILES_BUCKET = "brand-files";
-export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // Supabase ücretsiz planında tek dosya sınırı da 50 MB
-export const SIGNED_URL_SECONDS = 10 * 60;
+export const UPLOAD_FUNCTION = "file-upload";
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
 /* Uzantı → [MIME, panel türü] */
 const IMAGE = { png: ["image/png", "Görsel"], jpg: ["image/jpeg", "Görsel"], jpeg: ["image/jpeg", "Görsel"], webp: ["image/webp", "Görsel"], gif: ["image/gif", "Görsel"] };
@@ -29,7 +30,6 @@ export const BRAND_FILE_TYPES = {
   pptx: ["application/vnd.openxmlformats-officedocument.presentationml.presentation", "Şablon"],
 };
 export const acceptOf = (types) => Object.keys(types).map((e) => `.${e}`).join(",");
-export const mimeListOf = (types) => [...new Set(Object.values(types).map(([m]) => m))];
 
 /* Tarayıcıların aynı dosya için bildirebildiği diğer MIME adları (uzantı yine esas alınır). */
 const MIME_ALIASES = {
@@ -61,44 +61,61 @@ export function validateUploadFile(file, types = TASK_FILE_TYPES, maxBytes = MAX
   return { ok: true, ext, mime, type };
 }
 
-/* Depolama yolu: <üst kayıt id>/<dosya id>.<uzantı>. Dosya adı yola girmez (Türkçe / özel karakter sorunu yok); adı kayıtta durur. */
-export const storagePathFor = (ownerId, fileId, ext) => `${ownerId}/${fileId}.${ext}`;
 export const cleanFileName = (name) => String(name || "dosya").replace(/[\u0000-\u001f\\/]+/g, " ").trim().slice(0, 200) || "dosya";
 
-/* Marka dosyası hangi klasöre? Açık klasör varsa o; yoksa türe göre. */
+/* Marka dosyası hangi klasöre? Açık klasör varsa o; yoksa türe göre (sunucu da aynı eşlemeyi kullanır). */
 const FOLDER_FOR_TYPE = { "Görsel": "gorseller", "Vektör": "logolar", "Video": "video", "PDF": "kimlik", "Font": "fontlar", "Arşiv": "arsiv", "Şablon": "sablonlar", "Doküman": "sablonlar" };
 export const folderForUpload = (type, openFolderId) => openFolderId || FOLDER_FOR_TYPE[type] || "gorseller";
 
-/* Yüklemeden doğan hata iletisi (Storage REST yanıtı). */
+/* ───────────────────────── Yüklenen dosyanın bağlantıları ───────────────────────── */
+
+/* Kayıttaki bağlantıdan dosya kimliği (…/file/d/<id>/… veya …?id=<id>). */
+export const fileIdOf = (url) => (String(url || "").match(/\/file\/d\/([\w-]+)/) || String(url || "").match(/[?&]id=([\w-]+)/) || [])[1] || null;
+/* Panelden yüklenen dosya: fonksiyonun kaydettiği indirme bağlantısı (webContentLink) biçimi. */
+export const isUploadedFile = (item) => /^https:\/\/drive\.google\.com\/uc\?/.test(String(item?.driveUrl || ""));
+/* Gömülebilir önizleme (video, PDF) ve büyük görsel adresi; dosya bağlantıyla paylaşıldığı için oturum gerekmez. */
+export const embedUrlOf = (item) => { const id = fileIdOf(item?.driveUrl); return id ? `https://drive.google.com/file/d/${id}/preview` : null; };
+export const imageUrlOf = (item, width = 1600) => {
+  if (String(item?.thumbnail || "").startsWith("blob:")) return item.thumbnail; // demo
+  const id = fileIdOf(item?.driveUrl);
+  return id ? `https://drive.google.com/thumbnail?id=${id}&sz=w${width}` : item?.thumbnail || "";
+};
+export const mimeOf = (item) => (BRAND_FILE_TYPES[extOf(item?.name)] || [""])[0];
+
+/* Fonksiyonun döndürdüğü hata iletisi; yoksa durum koduna göre. */
 export function uploadErrorMessage(status, body, maxBytes = MAX_UPLOAD_BYTES) {
   let msg = "";
-  try { const b = typeof body === "string" ? JSON.parse(body) : body; msg = b?.message || b?.error || ""; } catch { /* gövde yok */ }
-  if (status === 413 || /size|large|exceeded/i.test(msg)) return `Dosya çok büyük. En fazla ${formatBytes(maxBytes)} yüklenebilir.`;
-  if (status === 415 || /mime|content type|not supported/i.test(msg)) return "Bu dosya türü yüklenemez.";
-  if (status === 401 || /jwt|expired/i.test(msg)) return "Oturumunuz sona ermiş. Sayfayı yenileyip tekrar giriş yapın.";
-  if (status === 403 || /security|policy|unauthorized|permission/i.test(msg)) return "Bu dosyayı yükleme yetkiniz yok.";
-  if (status === 409 || /exists|duplicate/i.test(msg)) return "Aynı adla bir dosya zaten var. Tekrar deneyin.";
-  if (/bucket not found/i.test(msg)) return "Dosya deposu bulunamadı. supabase/014_file_uploads.sql çalıştırılmalı.";
-  return msg ? `Yükleme başarısız: ${msg}` : `Yükleme başarısız (${status || "ağ hatası"}).`;
+  try { const b = typeof body === "string" ? JSON.parse(body) : body; msg = b?.error || b?.message || ""; } catch { /* gövde yok */ }
+  if (msg && !/function (was )?not found/i.test(msg)) return msg; // fonksiyon yayınlanmamışsa ağ geçidi iletisi gösterilmez
+  if (status === 404) return "Dosya yükleme henüz yapılandırılmadı. Yöneticiye bildirin.";
+  if (status === 413) return `Dosya çok büyük. En fazla ${formatBytes(maxBytes)} yüklenebilir.`;
+  if (status === 415) return "Bu dosya türü yüklenemez.";
+  if (status === 401) return "Oturumunuz sona ermiş. Sayfayı yenileyip tekrar giriş yapın.";
+  if (status === 403) return "Bu dosyayı yükleme yetkiniz yok.";
+  return `Yükleme başarısız (${status || "ağ hatası"}).`;
 }
 
 export class UploadAbortedError extends Error {
   constructor() { super("Yükleme iptal edildi."); this.name = "UploadAbortedError"; this.aborted = true; }
 }
 
-/* Storage REST uç noktasına XHR ile yükleme: supabase-js ilerleme bildirmez. signal (AbortController) ile iptal edilir. */
-export function xhrUpload({ url, key, token, bucket, path, file, mime, onProgress, signal }) {
+/* Fonksiyona XHR ile gönderim (supabase-js ilerleme bildirmez). Gönderim bitince %99'da bekler: dosya o sırada
+   depoya aktarılır; yanıt gelince kayıt döner. signal (AbortController) ile iptal edilir. */
+export function xhrUpload({ url, key, token, params, file, mime, onProgress, signal }) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(new UploadAbortedError()); return; }
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${url}/storage/v1/object/${bucket}/${path.split("/").map(encodeURIComponent).join("/")}`);
+    xhr.open("POST", `${url}/functions/v1/${UPLOAD_FUNCTION}?${new URLSearchParams(params)}`);
     xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     xhr.setRequestHeader("apikey", key);
     xhr.setRequestHeader("Content-Type", mime);
-    xhr.setRequestHeader("x-upsert", "false");
-    xhr.setRequestHeader("cache-control", "3600");
+    xhr.timeout = 5 * 60 * 1000;
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress?.(Math.min(0.99, e.loaded / e.total)); };
-    xhr.onload = () => { if (xhr.status >= 200 && xhr.status < 300) resolve(); else reject(new Error(uploadErrorMessage(xhr.status, xhr.responseText))); };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText).row); } catch { reject(new Error("Yükleme yanıtı okunamadı. Sayfayı yenileyin.")); }
+      } else reject(new Error(uploadErrorMessage(xhr.status, xhr.responseText)));
+    };
     xhr.onerror = () => reject(new Error("Bağlantı hatası: dosya yüklenemedi. İnternet bağlantınızı kontrol edip tekrar deneyin."));
     xhr.ontimeout = () => reject(new Error("Yükleme zaman aşımına uğradı. Tekrar deneyin."));
     xhr.onabort = () => reject(new UploadAbortedError());
@@ -107,28 +124,22 @@ export function xhrUpload({ url, key, token, bucket, path, file, mime, onProgres
   });
 }
 
-/* ───────────────────────── Kayıt biçimleri (panel alanları) ───────────────────────── */
-
-export const attachmentFromUpload = ({ id, taskId, file, check, path, userId, internal = false, now = new Date().toISOString() }) => ({
-  id, taskId, assetId: null, name: cleanFileName(file.name), type: check.type, size: formatBytes(file.size), thumbnail: null, driveUrl: "",
-  storagePath: path, mimeType: check.mime, fileSize: file.size, addedBy: userId, createdAt: now, internal: !!internal,
-});
-
-export const assetFromUpload = ({ id, brandId, folderId, file, check, path, userId, today = new Date().toISOString().slice(0, 10) }) => ({
-  id, brandId, folderId: folderForUpload(check.type, folderId), name: cleanFileName(file.name), type: check.type, thumbnail: null,
-  driveFileId: null, driveUrl: "", size: formatBytes(file.size), owner: userId, approvalStatus: "Onay Bekliyor", updatedAt: today,
-  storagePath: path, mimeType: check.mime, fileSize: file.size,
-});
-
-/* Hangi kovada? Görev eki → task-files, marka dosyası → brand-files. */
-export const bucketOf = (item) => (item && "taskId" in item ? TASK_FILES_BUCKET : BRAND_FILES_BUCKET);
-
 /* ───────────────────────── Demo (bellek içi) ───────────────────────── */
 
-/* Dosyalar tarayıcıda nesne adresi olarak tutulur (sayfa yenilenince kaybolur). Testler için:
+/* Kayıt biçimleri (panel alanları) — gerçek kaynakta bu alanları fonksiyonun eklediği satır verir. */
+export const attachmentFromUpload = ({ id, taskId, file, check, link, thumbnail = null, userId, internal = false, now = new Date().toISOString() }) => ({
+  id, taskId, assetId: null, name: cleanFileName(file.name), type: check.type, size: formatBytes(file.size), thumbnail, driveUrl: link,
+  addedBy: userId, createdAt: now, internal: !!internal,
+});
+
+export const assetFromUpload = ({ id, brandId, folderId, file, check, link, thumbnail = null, userId, today = new Date().toISOString().slice(0, 10) }) => ({
+  id, brandId, folderId: folderForUpload(check.type, folderId), name: cleanFileName(file.name), type: check.type, thumbnail,
+  driveFileId: fileIdOf(link), driveUrl: link, size: formatBytes(file.size), owner: userId, approvalStatus: "Onay Bekliyor", updatedAt: today,
+});
+
+/* Görseller tarayıcıda nesne adresi olarak gösterilir (sayfa yenilenince kaybolur). Testler için:
    globalThis.__cwSimulateUploadError = true | "ileti" → sonraki yükleme ağ hatasıyla düşer. */
 export function createMemoryFiles() {
-  const blobs = new Map(); // depolama yolu → adres
   const uuid = () => globalThis.crypto.randomUUID();
   const run = async (file, types, onProgress, signal) => {
     const check = validateUploadFile(file, types);
@@ -142,24 +153,20 @@ export function createMemoryFiles() {
     const fail = globalThis.__cwSimulateUploadError;
     if (fail) { globalThis.__cwSimulateUploadError = null; throw new Error(typeof fail === "string" ? fail : "Bağlantı hatası: dosya yüklenemedi. İnternet bağlantınızı kontrol edip tekrar deneyin."); }
     onProgress?.(1);
-    return check;
+    const fileId = `demo${uuid().replace(/-/g, "")}`;
+    const blob = check.type === "Görsel" && typeof Blob !== "undefined" && file instanceof Blob ? URL.createObjectURL(file) : null;
+    return { check, link: `https://drive.google.com/uc?id=${fileId}&export=download`, thumbnail: blob };
   };
-  const keep = (path, file) => blobs.set(path, typeof Blob !== "undefined" && file instanceof Blob ? URL.createObjectURL(file) : "");
   return {
     available: true,
     async uploadAttachment(task, file, { internal, userId, onProgress, signal } = {}) {
-      const check = await run(file, TASK_FILE_TYPES, onProgress, signal);
-      const id = uuid(), path = storagePathFor(task.id, id, check.ext);
-      keep(path, file);
-      return attachmentFromUpload({ id, taskId: task.id, file, check, path, userId, internal });
+      const { check, link, thumbnail } = await run(file, TASK_FILE_TYPES, onProgress, signal);
+      return attachmentFromUpload({ id: uuid(), taskId: task.id, file, check, link, thumbnail, userId, internal });
     },
     async uploadAsset(brandId, folderId, file, { userId, onProgress, signal } = {}) {
-      const check = await run(file, BRAND_FILE_TYPES, onProgress, signal);
-      const id = uuid(), path = storagePathFor(brandId, id, check.ext);
-      keep(path, file);
-      return assetFromUpload({ id, brandId, folderId, file, check, path, userId });
+      const { check, link, thumbnail } = await run(file, BRAND_FILE_TYPES, onProgress, signal);
+      return assetFromUpload({ id: uuid(), brandId, folderId, file, check, link, thumbnail, userId });
     },
-    async urls(items) { return Object.fromEntries(items.filter((i) => blobs.get(i.storagePath)).map((i) => [i.storagePath, blobs.get(i.storagePath)])); },
-    async remove(items) { items.forEach((i) => blobs.delete(i.storagePath)); },
+    async remove() { /* demo: depo yok */ },
   };
 }

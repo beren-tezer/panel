@@ -1,7 +1,7 @@
 // Dosya yükleme — görev ekleri ve marka dosyaları (demo verisi, gerçek arayüz etkileşimleri; DevTools protokolü).
 //   npm run test:ui:files
-// Storage erişim kuralları 014_file_uploads.sql PGlite testiyle doğrulanır; burada arayüz akışı (seçme, sürükle-bırak,
-// ilerleme, iptal, hata + tekrar deneme, önizleme, kaldırma, yetkiye göre düğmeler) sınanır.
+// Sunucu tarafı (file-upload Edge Function + RLS) burada yoktur; arayüz akışı (seçme, sürükle-bırak, ilerleme, iptal,
+// hata + tekrar deneme, önizleme, kaldırma, yetkiye göre düğmeler, arayüzde depo adının geçmemesi) sınanır.
 import { startHarness, waitFor, sleep } from "./ui-harness.mjs";
 
 const h = await startHarness({ port: 5194, debugPort: 9354 });
@@ -56,8 +56,9 @@ try {
   /* Önizleme */
   await page(`$$("[data-attachments] button[aria-label$='önizle']").find((b) => b.getAttribute("aria-label").startsWith("Kampanya Görseli.png")).click(); return true;`);
   await waitFor(() => page(`return !!$("[data-uploaded-preview]");`), 3000);
-  const pv = await page(`const m = $("[data-uploaded-preview]"); return { mime: m.dataset.uploadedPreview, img: !!m.querySelector("img[src^='blob:']"), open: !!exact("a", "Yeni Sekmede Aç"), dl: !!exact("a", "İndir") };`);
-  check("Önizleme: görsel, Yeni Sekmede Aç ve İndir", pv.mime === "image/png" && pv.img && pv.open && pv.dl, JSON.stringify(pv));
+  const pv = await page(`const m = $("[data-uploaded-preview]"); return { mime: m.dataset.uploadedPreview, img: !!m.querySelector("img[src^='blob:']"), copy: !!exact("button", "Bağlantıyı Kopyala"), dl: exact("a", "İndir")?.href || "" };`);
+  check("Önizleme: görsel, Bağlantıyı Kopyala ve İndir (kayıttaki bağlantı)", pv.mime === "image/png" && pv.img && pv.copy && pv.dl.startsWith("https://drive.google.com/uc?id="), JSON.stringify(pv));
+  check("Önizlemede depo adı geçmez", await page(`return !/drive/i.test($("[data-cw-modal]").innerText);`));
   await page(`$$("[data-cw-modal] button[aria-label='Kapat']").at(-1)?.click(); return true;`); await sleep(250);
   await page(`$$("[data-attachments] button[aria-label$='önizle']").find((b) => b.getAttribute("aria-label").startsWith("Brief.pdf")).click(); return true;`);
   check("PDF önizlemesi tarayıcıda açılır", await waitFor(() => page(`return !!$("[data-uploaded-preview='application/pdf'] iframe");`), 3000).then(() => true, () => false));
@@ -97,6 +98,8 @@ try {
   /* Kaldırma + etkinlik kaydı */
   await page(`$("[data-attachments] button[aria-label='Brief.pdf ekini kaldır']").click(); return true;`); await sleep(250);
   check("Yüklenen ek kaldırılabilir", !(await attNames()).includes("Brief.pdf"));
+  check("Ekler: yalnızca “Dosya Yükle” (bağlantı ekleme yok); görev detayında depo adı geçmez",
+    await page(`const s = $("[data-attachments]"); return !exact("button", "Bağlantı", s) && !/drive/i.test(${drawer}.innerText);`));
   await page(`$("button[aria-label='Detayı kapat']")?.click(); return true;`); await sleep(300);
 
   /* 2. Marka Dosyaları → Dosya Yükle */
@@ -104,8 +107,8 @@ try {
   await waitFor(() => page(`return $$("main button").some((b) => b.textContent.includes("Tepe Emlak"));`), 4000);
   await page(`$$("main button").find((b) => b.textContent.includes("Tepe Emlak") && b.textContent.includes("klasör")).click(); return true;`);
   await waitFor(() => page(`return !!$("[data-brand-files]");`), 3000);
-  const head = await page(`const s = $("[data-brand-files]"); return { upload: !!exact("button", "Dosya Yükle", s), drive: !!exact("button", "Drive Bağlantısı Ekle", s), accept: $("[data-upload-input='brand-files']").accept };`);
-  check("Marka Dosyaları: “Dosya Yükle” ve “Drive Bağlantısı Ekle” birlikte", head.upload && head.drive && head.accept.includes(".svg") && head.accept.includes(".zip"), JSON.stringify(head));
+  const head = await page(`const s = $("[data-brand-files]"); return { upload: !!exact("button", "Dosya Yükle", s), link: !!exact("button", "Bağlantı Ekle", s), drive: /drive/i.test($("main").innerText), accept: $("[data-upload-input='brand-files']").accept };`);
+  check("Marka Dosyaları: yalnızca “Dosya Yükle”; depo adı geçmez", head.upload && !head.link && !head.drive && head.accept.includes(".svg") && head.accept.includes(".zip"), JSON.stringify(head));
   const folderCount = (name) => page(`const b = $$("[data-brand-files] button").find((x) => x.textContent.includes(${JSON.stringify(name)}) && x.textContent.includes("dosya")); return b ? +(b.textContent.match(/(\\d+) dosya/) || [0, -1])[1] : -1;`);
   const g0 = await folderCount("Görsel Kütüphanesi");
   await pick("brand-files", [["Ürün Fotoğrafı.png", "png"]]);
@@ -116,13 +119,13 @@ try {
   const l0 = await page(`return $$("[data-asset-card]").length;`);
   await pick("brand-files", [["Yeni Logo.svg", "svg"]]);
   await waitFor(() => page(`return $$("[data-asset-card]").length === ${l0 + 1};`), 4000).catch(() => {});
-  const card = await page(`const c = $$("[data-asset-card]").find((x) => x.textContent.includes("Yeni Logo.svg")); return c ? { text: c.textContent, img: !!c.querySelector("img[src^='blob:']"), open: !!c.querySelector("a[href^='blob:']") } : null;`);
-  check("Açık klasöre (Logolar) yüklenir; kart, küçük resim ve “Aç” bağlantısı", !!card && card.text.includes("Onay Bekliyor") && card.img && card.open, JSON.stringify(card));
+  const card = await page(`const c = $$("[data-asset-card]").find((x) => x.textContent.includes("Yeni Logo.svg")); return c ? { text: c.textContent, open: !!c.querySelector("a[href^='https://drive.google.com/uc?id=']") } : null;`);
+  check("Açık klasöre (Logolar) yüklenir; kart ve “Aç” bağlantısı", !!card && card.text.includes("Onay Bekliyor") && card.text.includes("Aç") && card.open, JSON.stringify(card));
   await dropOn("[data-brand-files]", [["Kurumsal Kimlik.pdf", "pdf"]]);
   await waitFor(() => page(`return $$("[data-asset-card]").some((x) => x.textContent.includes("Kurumsal Kimlik.pdf"));`), 4000).catch(() => {});
   check("Sürükle-bırak ile açık klasöre yüklenir", await page(`return $$("[data-asset-card]").some((x) => x.textContent.includes("Kurumsal Kimlik.pdf"));`));
   await page(`$$("[data-asset-card]").find((x) => x.textContent.includes("Yeni Logo.svg")).querySelector("button").click(); return true;`);
-  check("Marka dosyası önizlemesi açılır (onay durumu düzenlenebilir)", await waitFor(() => page(`return !!$("[data-uploaded-preview='image/svg+xml'] img") && !!exact("button", "Onaylandı");`), 3000).then(() => true, () => false));
+  check("Marka dosyası önizlemesi açılır (onay durumu düzenlenebilir)", await waitFor(() => page(`return !!$("[data-uploaded-preview='image/svg+xml']") && !!exact("a", "İndir") && !!exact("button", "Onaylandı");`), 3000).then(() => true, () => false));
   await page(`$$("[data-cw-modal] button[aria-label='Kapat']").at(-1)?.click(); return true;`); await sleep(250);
 
   /* 3. Yetkiye göre düğmeler */

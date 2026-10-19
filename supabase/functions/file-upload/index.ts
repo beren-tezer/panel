@@ -15,7 +15,8 @@
 // Hizmet hesabının kendi depolama kotası yoktur: kök klasör bir Ortak Drive'da (Shared Drive) olmalıdır.
 //
 // Gizli değerler (Dashboard → Edge Functions → Secrets):
-//   GOOGLE_SERVICE_ACCOUNT_JSON : Google Cloud'dan indirilen JSON anahtar dosyasının TAMAMI
+//   GCP_SERVICE_ACCOUNT_KEY     : Google Cloud'dan indirilen JSON anahtar dosyasının TAMAMI (veya base64 hâli;
+//                                 eski ad GOOGLE_SERVICE_ACCOUNT_JSON da okunur)
 //   DRIVE_ROOT_FOLDER_ID        : Ortak Drive'daki ana klasörün kimliği (adres çubuğunda …/folders/<kimlik>)
 // Yayınlama:  supabase functions deploy file-upload   (veya Dashboard → Edge Functions → Deploy a new function → file-upload)
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
@@ -67,10 +68,12 @@ const b64url = (data: Uint8Array | string) => {
   return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 };
 
+/* Anahtar JSON'un kendisi veya base64 hâli olabilir. Ad: GOOGLE_SERVICE_ACCOUNT_JSON (eski) veya GCP_SERVICE_ACCOUNT_KEY. */
 function serviceAccount(): ServiceAccount {
-  const raw = Deno.env.get("GOOGLE_SERVICE_ACCOUNT_JSON");
+  const raw = (Deno.env.get("GCP_SERVICE_ACCOUNT_KEY") || Deno.env.get("GOOGLE_SERVICE_ACCOUNT_JSON") || "").trim();
   if (!raw) throw new Error("not_configured");
-  const sa = JSON.parse(raw);
+  let sa;
+  try { sa = JSON.parse(raw.startsWith("{") ? raw : new TextDecoder().decode(Uint8Array.from(atob(raw), (c) => c.charCodeAt(0)))); } catch { throw new Error("not_configured"); }
   if (!sa.client_email || !sa.private_key) throw new Error("not_configured");
   return sa;
 }

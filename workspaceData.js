@@ -33,6 +33,10 @@ import { createSupabaseBrandKit } from "./brandKit.js";
 import { signedInWithEmailLink } from "./passwords.js";
 import { rowToAgreementText } from "./agreement.js";
 import { peoplePatch, withPeople } from "./taskPeople.js";
+import {
+  BRAND_FILES_BUCKET, BRAND_FILE_TYPES, SIGNED_URL_SECONDS as FILE_URL_SECONDS, TASK_FILES_BUCKET, TASK_FILE_TYPES,
+  assetFromUpload, attachmentFromUpload, bucketOf, storagePathFor, validateUploadFile, xhrUpload,
+} from "./fileUploads.js";
 import { CALLBACK_PATH, PASSWORD_TYPES, clearNeedsPassword, markNeedsPassword, needsPassword } from "./authCallback.js";
 import { CONTENT_BUCKET, MAX_CONTENT_BYTES, latestVersion, pendingRequest, validateContentFile } from "./approvals.js";
 import {
@@ -59,13 +63,14 @@ function newActivity(prev, next) {
 
 /* ───────────────────────── Demo (bellek içi) kaynak ───────────────────────── */
 
-export function createMemorySource(buildDemo, { checklist = null, content = null } = {}) {
+export function createMemorySource(buildDemo, { checklist = null, content = null, files = null } = {}) {
   let taskNo = 1000;
   let agreementText = null; // demo: panelden kaydedilen sözleşme metni (sayfa yenilenince sıfırlanır)
   const created = new Map(); // görev kimliği → kod (tekrar denemede aynı kod)
   return {
     draftScope: "demo",
     content,
+    files,
     async createTasks(tasks) {
       await new Promise((r) => setTimeout(r, 120));
       // Yalnızca demo: tarayıcı testlerinde ağ hatasını taklit etmek için (window.__cwSimulateSaveError = true).
@@ -207,7 +212,7 @@ const TASK_COLUMNS = {
   status: "status", priority: "priority", publishDate: "publish_date", dueDate: "due_date", dueTime: "due_time",
   description: "description", createdAt: "created_at", updatedAt: "updated_at", checklistDisabled: "checklist_disabled",
 };
-const NULLABLE = new Set(["assignee_id", "reporter_id", "publish_date", "due_date", "due_time", "platform"]); // platform: 011 sonrası boş olabilir
+const NULLABLE = new Set(["assignee_id", "reporter_id", "publish_date", "due_date", "due_time", "platform", "drive_url"]); // platform: 011 sonrası boş olabilir; drive_url: 014 sonrası yüklenen dosyada boş
 const ASSET_COLUMNS = {
   brandId: "brand_id", folderId: "folder_id", name: "name", type: "type", thumbnail: "thumbnail_url",
   driveFileId: "drive_file_id", driveUrl: "drive_url", size: "size_label", owner: "owner_id",
@@ -252,19 +257,25 @@ const rowToBrand = (r) => ({ id: r.id, name: r.name, initials: r.initials, secto
 const brandToRow = (b) => ({ id: b.id, name: b.name, initials: b.initials, sector: b.sector, color: b.color, drive_folder_id: b.driveFolderId || null, status: b.status || "active" });
 const BRAND_COLUMNS = { name: "name", initials: "initials", sector: "sector", color: "color", driveFolderId: "drive_folder_id", status: "status", slug: "slug" };
 
+/* 014: yüklenen dosyalarda storage_path dolu, drive_url boştur. */
+const fileFields = (r) => (r.storage_path ? { storagePath: r.storage_path, mimeType: r.mime_type || "", fileSize: Number(r.file_size) || 0 } : {});
+const fileColumns = (x) => (x.storagePath ? { storage_path: x.storagePath, mime_type: x.mimeType || null, file_size: x.fileSize || null } : {});
 const rowToAsset = (r) => ({
   id: r.id, brandId: r.brand_id, folderId: r.folder_id, name: r.name, type: r.type, thumbnail: r.thumbnail_url,
-  driveFileId: r.drive_file_id, driveUrl: r.drive_url, size: r.size_label, owner: r.owner_id, approvalStatus: r.approval_status, updatedAt: r.updated_on,
+  driveFileId: r.drive_file_id, driveUrl: r.drive_url || "", size: r.size_label, owner: r.owner_id, approvalStatus: r.approval_status, updatedAt: r.updated_on,
+  ...fileFields(r),
 });
-const assetToRow = (a) => ({ id: a.id, ...toColumns(a, ASSET_COLUMNS) });
+const assetToRow = (a) => ({ id: a.id, ...toColumns(a, ASSET_COLUMNS), ...fileColumns(a) });
 
 const rowToAttachment = (r) => ({
   id: r.id, taskId: r.task_id, assetId: r.asset_id, name: r.name, type: r.type, size: r.size_label,
-  thumbnail: r.thumbnail_url, driveUrl: r.drive_url, addedBy: r.added_by, createdAt: r.created_at, internal: r.internal === true,
+  thumbnail: r.thumbnail_url, driveUrl: r.drive_url || "", addedBy: r.added_by, createdAt: r.created_at, internal: r.internal === true,
+  ...fileFields(r),
 });
 const attachmentToRow = (a) => ({
   id: a.id, task_id: a.taskId, asset_id: a.assetId || null, name: a.name, type: a.type, size_label: a.size,
-  thumbnail_url: a.thumbnail || null, drive_url: a.driveUrl, added_by: a.addedBy, created_at: a.createdAt, internal: !!a.internal,
+  thumbnail_url: a.thumbnail || null, drive_url: a.driveUrl || null, added_by: a.addedBy, created_at: a.createdAt, internal: !!a.internal,
+  ...fileColumns(a),
 });
 
 const rowToComment = (r) => ({ id: r.id, taskId: r.task_id, userId: r.user_id, text: r.body, createdAt: r.created_at });
@@ -455,6 +466,8 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
   /* 007 (içerik sürümleri / onay istekleri) var mı. */
   let approvalsAvailable = false;
   const contentApi = createSupabaseContent(supabase, storage, () => approvalsAvailable);
+  let filesAvailable = false;
+  const filesApi = createSupabaseFiles(supabase, storage, () => filesAvailable);
   const refreshContent = async (taskId, merge) => {
     if (!approvalsAvailable) return;
     try { merge(await contentApi.refresh(taskId)); } catch (err) { console.warn("İçerik sürümleri yenilenemedi:", err.message); }
@@ -520,9 +533,10 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
         break;
       }
       case "DELETE_TASK":
-        // Görseller görev silinmeden önce kaldırılır (Storage erişimi görev görünürlüğüne bağlı).
+        // Görseller ve yüklenen ekler görev silinmeden önce kaldırılır (Storage erişimi görev görünürlüğüne bağlı).
         // Yorum, ek, onay ve aktivite kayıtları yabancı anahtar (on delete cascade) ile silinir.
         await removeTaskImages(action.id);
+        await filesApi.remove(prev.attachments.filter((a) => a.taskId === action.id && a.storagePath));
         must(await supabase.from("tasks").delete().eq("id", action.id));
         return;
       case "ADD_COMMENT": {
@@ -537,9 +551,12 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
       case "ADD_ATTACHMENT":
         must(await supabase.from("attachments").insert(attachmentToRow(action.attachment)));
         break;
-      case "REMOVE_ATTACHMENT":
+      case "REMOVE_ATTACHMENT": {
         must(await supabase.from("attachments").delete().eq("id", action.id));
+        const removed = prev.attachments.find((a) => a.id === action.id);
+        if (removed?.storagePath) await filesApi.remove([removed]); // yüklenen dosya Storage'dan da silinir
         break;
+      }
       case "ADD_BRAND": {
         const saved = must(await supabase.from("brands").insert(brandToRow(action.brand)).select().single());
         merge({ brands: [rowToBrand(saved)] }); // sunucunun ürettiği bağlantı adresi (007)
@@ -634,6 +651,7 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
     // Kontrol listesi şablonları ve geçmişi ihtiyaç olduğunda yüklenir; görev listeleri açılış yüküne dahildir.
     checklist: checklistApi,
     content: contentApi,
+    files: filesApi,
     // Taslaklar Supabase projesi bazında ayrılır (geliştirme ve canlı projelerin taslakları karışmaz).
     draftScope: (() => { try { return new URL(storage.url).host; } catch { return "supabase"; } })(),
 
@@ -836,6 +854,8 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
         .then(({ data, error }) => { if (error) throw error; return data; });
       // 012 (Görevi Veren) çalıştırıldı mı? Sütun yoksa panel onsuz çalışır.
       { const { error: reporterError } = await supabase.from("tasks").select("reporter_id").limit(1); reporterColumn = !reporterError; }
+      // 014 (dosya yükleme) çalıştırıldı mı? Değilse yükleme düğmeleri gösterilmez, Drive bağlantıları çalışmaya devam eder.
+      { const { error: filesError } = await supabase.from("attachments").select("storage_path").limit(1); filesAvailable = !filesError; }
       // 013 (çoklu Görevi Yapan / Platform) çalıştırıldı mı?
       { const { error: multiError } = await supabase.from("tasks").select("assignee_ids, platforms").limit(1); multiColumns = !multiError; }
       const [profiles, brands, members, tasks, comments, attachments, assets, activity, approvals, notifications, checklists, checklistItems, versions, contentAssets, requests, agreementTextRow] = await Promise.all([
@@ -926,6 +946,74 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
 }
 
 /* ───────────────────────── İçerik sürümleri (007) ───────────────────────── */
+
+/* Görev ekleri ve marka dosyaları: Storage'a ilerleme göstergeli yükleme (iptal edilebilir), kayıt, süreli (imzalı) adresler.
+   Önce dosya yüklenir, sonra kayıt oluşturulur; kayıt oluşturulamazsa dosya geri silinir (yetim dosya kalmaz).
+   Yetki sunucuda uygulanır (014: Storage + tablo RLS); burada yalnızca istemci doğrulaması yapılır. */
+export function createSupabaseFiles(supabase, cfg = {}, available = () => true) {
+  const fail = (error) => {
+    const m = error?.message || "İşlem tamamlanamadı.";
+    if (error?.code === "42703" || /storage_path/.test(m)) return new Error("Dosya yükleme için supabase/014_file_uploads.sql çalıştırılmalı.");
+    if (error?.code === "42501" || /row-level security|permission denied/i.test(m)) return new Error("Bu dosyayı ekleme yetkiniz yok.");
+    return new Error(m);
+  };
+  const token = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error("Oturumunuz sona ermiş. Sayfayı yenileyip tekrar giriş yapın.");
+    return session.access_token;
+  };
+  const put = async (bucket, path, file, mime, onProgress, signal) =>
+    xhrUpload({ url: cfg.url, key: cfg.key, token: await token(), bucket, path, file, mime, onProgress, signal });
+  const undo = (bucket, path) => supabase.storage.from(bucket).remove([path]).catch(() => {});
+  return {
+    get available() { return available(); },
+    async uploadAttachment(task, file, { internal = false, userId, onProgress, signal } = {}) {
+      const check = validateUploadFile(file, TASK_FILE_TYPES);
+      if (!check.ok) throw new Error(check.error);
+      const id = globalThis.crypto.randomUUID();
+      const path = storagePathFor(task.id, id, check.ext);
+      await put(TASK_FILES_BUCKET, path, file, check.mime, onProgress, signal);
+      const record = attachmentFromUpload({ id, taskId: task.id, file, check, path, userId, internal });
+      const { created_at, ...row } = attachmentToRow(record); // oluşturma zamanı sunucudan
+      const res = await supabase.from("attachments").insert(row).select().single();
+      if (res.error) { await undo(TASK_FILES_BUCKET, path); throw fail(res.error); }
+      onProgress?.(1);
+      return rowToAttachment(res.data);
+    },
+    async uploadAsset(brandId, folderId, file, { userId, onProgress, signal } = {}) {
+      const check = validateUploadFile(file, BRAND_FILE_TYPES);
+      if (!check.ok) throw new Error(check.error);
+      const id = globalThis.crypto.randomUUID();
+      const path = storagePathFor(brandId, id, check.ext);
+      await put(BRAND_FILES_BUCKET, path, file, check.mime, onProgress, signal);
+      const res = await supabase.from("assets").insert(assetToRow(assetFromUpload({ id, brandId, folderId, file, check, path, userId }))).select().single();
+      if (res.error) { await undo(BRAND_FILES_BUCKET, path); throw fail(res.error); }
+      onProgress?.(1);
+      return rowToAsset(res.data);
+    },
+    /* items: ek veya marka dosyası kayıtları → { [storagePath]: imzalı adres } */
+    async urls(items) {
+      const out = {};
+      for (const bucket of [TASK_FILES_BUCKET, BRAND_FILES_BUCKET]) {
+        const paths = [...new Set(items.filter((i) => i.storagePath && bucketOf(i) === bucket).map((i) => i.storagePath))];
+        if (!paths.length) continue;
+        const { data, error } = await supabase.storage.from(bucket).createSignedUrls(paths, FILE_URL_SECONDS);
+        if (error) throw fail(error);
+        data.filter((r) => r.signedUrl && !r.error).forEach((r) => { out[r.path] = r.signedUrl; });
+      }
+      return out;
+    },
+    /* En iyi çaba: Storage'dan silinemeyen dosya yalnızca uyarı olarak yazılır (kayıt zaten silinmiştir). */
+    async remove(items) {
+      for (const bucket of [TASK_FILES_BUCKET, BRAND_FILES_BUCKET]) {
+        const paths = items.filter((i) => i.storagePath && bucketOf(i) === bucket).map((i) => i.storagePath);
+        if (!paths.length) continue;
+        const { error } = await supabase.storage.from(bucket).remove(paths);
+        if (error) console.warn("Dosya Storage'dan silinemedi:", error.message);
+      }
+    },
+  };
+}
 
 /* Sürüm oluşturma, dosya yükleme (ilerleme göstergeli), dosya kaldırma ve süreli (imzalı) önizleme adresleri.
    Yetki ve kilit kuralları sunucuda uygulanır (RLS + tetikleyiciler); burada yalnızca istemci doğrulaması yapılır. */

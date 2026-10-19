@@ -34,6 +34,7 @@ import {
 } from "./rbac.js";
 import { assignRecipients, statusRecipients } from "./notifyRules.js";
 import { assigneesOf, isAssignee, peoplePatch, platformsOf, withPeople } from "./taskPeople.js";
+import { BRAND_FILE_TYPES, MAX_UPLOAD_BYTES, TASK_FILE_TYPES, acceptOf, createMemoryFiles } from "./fileUploads.js";
 import {
   Activity, AlertTriangle, Archive, ArrowDown, ArrowUp, Bold, BookOpen, Calendar, CalendarDays, CalendarRange, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
   Circle, ClipboardCheck, EyeOff, KeyRound, Globe, Megaphone, ClipboardList, Clock, Copy, Download, ExternalLink, Eye, File as FileIcon, FileImage, FileText, Film, Flag, Folder, FolderOpen, HardDrive, Heading, History, ListChecks,
@@ -1364,13 +1365,131 @@ function DateInput({ value, onChange, danger, className = "" }) {
 /* Küçük resim; adres açılamazsa (süresi dolmuş/erişimsiz bağlantı) dosya türü simgesine düşer. */
 function AttachmentThumb({ attachment: a, size = 32, aspect, className = "" }) {
   const [failed, setFailed] = useState(false);
-  useEffect(() => { setFailed(false); }, [a.thumbnail]);
-  if (a.thumbnail && !failed) {
+  const uploaded = useFileHref(a.type === "Görsel" && a.storagePath ? a : null); // yüklenen görselin süreli adresi
+  const src = a.thumbnail || uploaded;
+  useEffect(() => { setFailed(false); }, [src]);
+  if (src && !failed) {
     const box = aspect ? { width: "100%", aspectRatio: aspect } : { width: size, height: size };
-    return <img src={a.thumbnail} alt="" loading="lazy" onError={() => setFailed(true)} className={`object-cover shrink-0 bg-slate-100 ${aspect ? "" : "rounded-md"} ${className}`} style={box} />;
+    return <img src={src} alt="" loading="lazy" onError={() => setFailed(true)} className={`object-cover shrink-0 bg-slate-100 ${aspect ? "" : "rounded-md"} ${className}`} style={box} />;
   }
   if (aspect) return <span className="w-full flex items-center justify-center bg-slate-50" style={{ aspectRatio: aspect }}><FileTypeTile type={a.type} size={36} /></span>;
   return <FileTypeTile type={a.type} size={size} />;
+}
+
+/* ───────────────────────── Yüklenen dosyalar (Supabase Storage) ───────────────────────── */
+
+/* Özel kovadaki dosyalar süreli imzalı adresle açılır; adresler 9 dakika önbellekte tutulur (sunucuda 10 dakika geçerli). */
+const fileUrlCache = new Map(); // depolama yolu → { url, until }
+function useFileUrls(items) {
+  const { filesApi } = useWS();
+  const [, bump] = useState(0);
+  const need = items.filter((i) => i && i.storagePath);
+  const key = need.map((i) => i.storagePath).join("|");
+  useEffect(() => {
+    if (!filesApi || !need.length) return undefined;
+    const now = Date.now();
+    const missing = need.filter((i) => !(fileUrlCache.get(i.storagePath)?.until > now));
+    if (!missing.length) return undefined;
+    let live = true;
+    filesApi.urls(missing).then((map) => {
+      const until = Date.now() + 9 * 60 * 1000;
+      Object.entries(map).forEach(([path, url]) => fileUrlCache.set(path, { url, until }));
+      if (live) bump((n) => n + 1);
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [filesApi, key]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (item) => (item?.storagePath ? fileUrlCache.get(item.storagePath)?.url || "" : "");
+}
+/* Dosyanın açılacağı adres: yüklenen dosyada süreli adres, Drive kaydında Drive bağlantısı. */
+function useFileHref(item) {
+  const urlOf = useFileUrls(item ? [item] : EMPTY);
+  return item?.storagePath ? urlOf(item) : item?.driveUrl || "";
+}
+const openLabel = (item) => (item?.storagePath ? "Dosyayı aç" : "Drive'da aç");
+function FileOpenLink({ item, className, children, label }) {
+  const href = useFileHref(item);
+  const text = label || `${item?.name || "Dosya"} — ${openLabel(item)}`;
+  if (!href) return <span className={`${className} opacity-40 cursor-wait`} aria-disabled="true" title="Bağlantı hazırlanıyor…">{children}</span>;
+  return <a href={href} target="_blank" rel="noopener noreferrer" className={className} aria-label={text} title={openLabel(item)}>{children}</a>;
+}
+
+/* Yükleme kuyruğu: her dosya için ilerleme, iptal, hata ve tekrar deneme. start(file, { onProgress, signal }) → kayıt. */
+function useUploads(start, onDone) {
+  const [items, setItems] = useState([]);
+  const startRef = useRef(start); startRef.current = start;
+  const doneRef = useRef(onDone); doneRef.current = onDone;
+  const patch = (key, p) => setItems((xs) => xs.map((x) => (x.key === key ? { ...x, ...p } : x)));
+  const drop = (key) => setItems((xs) => xs.filter((x) => x.key !== key));
+  const run = useCallback((file, key = uid()) => {
+    const ctrl = new AbortController();
+    setItems((xs) => [...xs.filter((x) => x.key !== key), { key, file, name: file.name, size: file.size, progress: 0, error: "", ctrl }]);
+    Promise.resolve().then(() => startRef.current(file, { onProgress: (p) => patch(key, { progress: p }), signal: ctrl.signal }))
+      .then((rec) => { drop(key); doneRef.current(rec, file); })
+      .catch((err) => { if (err?.aborted) drop(key); else patch(key, { error: err?.message || "Yükleme başarısız.", ctrl: null }); });
+  }, []);
+  const busy = items.some((x) => !x.error);
+  // Yükleme sürerken sayfadan çıkılırsa tarayıcı uyarır (yarım kalan dosya kaydedilmez).
+  useEffect(() => {
+    if (!busy) return undefined;
+    const warn = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [busy]);
+  return { items, busy, add: (files) => [...files].forEach((f) => run(f)), retry: (x) => run(x.file, x.key), cancel: (x) => x.ctrl?.abort(), dismiss: (x) => drop(x.key) };
+}
+
+function UploadQueue({ uploads }) {
+  if (!uploads.items.length) return null;
+  return (
+    <ul className="space-y-1.5" aria-live="polite" data-upload-queue="">
+      {uploads.items.map((x) => {
+        const pct = Math.round((x.progress || 0) * 100);
+        return (
+          <li key={x.key} data-upload-item={x.error ? "error" : "progress"} className={`rounded-lg border px-2.5 py-2 ${x.error ? "border-red-200 bg-red-50" : "border-slate-200 bg-white"}`}>
+            <div className="flex items-center gap-2 min-w-0">
+              {x.error ? <AlertTriangle size={14} className="text-red-600 shrink-0" aria-hidden="true" /> : <Upload size={14} className="text-orange-600 shrink-0" aria-hidden="true" />}
+              <span className="flex-1 min-w-0 truncate cw-12 font-medium text-slate-800" title={x.name}>{x.name}</span>
+              <span className="cw-11 text-slate-500 tabular-nums shrink-0">{x.error ? formatBytes(x.size) : `${pct}%`}</span>
+              {x.error ? (
+                <>
+                  <button type="button" onClick={() => uploads.retry(x)} className="h-7 px-2 shrink-0 inline-flex items-center gap-1 rounded-md cw-11 font-semibold text-red-700 hover:bg-red-100"><RefreshCw size={12} />Tekrar Dene</button>
+                  <button type="button" onClick={() => uploads.dismiss(x)} className="h-7 w-7 shrink-0 inline-flex items-center justify-center rounded-md text-red-600 hover:bg-red-100" aria-label={`${x.name} uyarısını kapat`}><X size={13} /></button>
+                </>
+              ) : (
+                <button type="button" onClick={() => uploads.cancel(x)} className="h-7 w-7 shrink-0 inline-flex items-center justify-center rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50" aria-label={`${x.name} yüklemesini iptal et`} title="İptal"><X size={13} /></button>
+              )}
+            </div>
+            {x.error
+              ? <p role="alert" className="mt-1 cw-11 text-red-700 break-words">{x.error}</p>
+              : <span role="progressbar" aria-label={`${x.name} yükleniyor`} aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} className="mt-1.5 block h-1.5 rounded-full bg-slate-100 overflow-hidden"><span className="block h-full bg-orange-500 transition-[width] duration-200" style={{ width: `${Math.max(3, pct)}%` }} /></span>}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function UploadTrigger({ accept, onFiles, label = "Dosya Yükle", variant = "secondary", name }) {
+  const ref = useRef(null);
+  return (
+    <>
+      <Btn size="sm" variant={variant} onClick={() => ref.current?.click()}><Upload size={13} />{label}</Btn>
+      <input ref={ref} type="file" multiple accept={accept} className="hidden" aria-hidden="true" tabIndex={-1} data-upload-input={name}
+        onChange={(e) => { const list = [...e.target.files]; e.target.value = ""; if (list.length) onFiles(list); }} />
+    </>
+  );
+}
+
+/* Sürükle-bırak: bölümün üzerine bırakılan dosyalar yüklenir. */
+function useFileDrop(onFiles, enabled) {
+  const [over, setOver] = useState(false);
+  if (!enabled) return [{}, false];
+  const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+  return [{
+    onDragOver: (e) => { if (!hasFiles(e)) return; e.preventDefault(); if (!over) setOver(true); },
+    onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOver(false); },
+    onDrop: (e) => { if (!e.dataTransfer?.files?.length) return; e.preventDefault(); setOver(false); onFiles([...e.dataTransfer.files]); },
+  }, over];
 }
 
 const attachmentTriggerIcon = (list) => {
@@ -1380,7 +1499,7 @@ const attachmentTriggerIcon = (list) => {
 };
 
 function AttachmentList({ attachments, onPreview, contentRef }) {
-  const images = attachments.filter((a) => a.type === "Görsel" && a.thumbnail).slice(0, 3);
+  const images = attachments.filter((a) => a.type === "Görsel" && (a.thumbnail || a.storagePath)).slice(0, 3);
   return (
     <div ref={contentRef}>
       <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1 cw-10 font-semibold uppercase tracking-wide text-slate-400">
@@ -1406,7 +1525,7 @@ function AttachmentList({ attachments, onPreview, contentRef }) {
               </span>
             </button>
             <button type="button" onClick={() => onPreview(a)} className="h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100" aria-label={`${a.name} önizle`} title="Önizle"><Eye size={13} /></button>
-            {a.driveUrl && <a href={a.driveUrl} target="_blank" rel="noopener noreferrer" className="h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-md text-slate-400 hover:text-orange-600 hover:bg-orange-50" aria-label={`${a.name} dosyasını Drive'da aç`} title="Drive'da aç"><ExternalLink size={13} /></a>}
+            {(a.driveUrl || a.storagePath) && <FileOpenLink item={a} className="h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-md text-slate-400 hover:text-orange-600 hover:bg-orange-50" label={`${a.name} dosyasını ${a.storagePath ? "aç" : "Drive'da aç"}`}><ExternalLink size={13} /></FileOpenLink>}
           </li>
         ))}
       </ul>
@@ -2206,12 +2325,22 @@ function ContentTable({ tasks, sort, setSort, defaultBrandId, dueDefault, isVisi
 
 /* ───────────────────────── Marka dosyaları ───────────────────────── */
 
+/* Marka dosyası küçük resmi: Drive kaydında kayıtlı küçük resim, yüklenen görselde süreli adres. */
+/* Tarayıcıda resim olarak gösterilebilen yüklenmiş dosya (SVG <img> içinde betik çalıştırmaz; PSD gösterilemez). */
+const previewableImage = (x) => !!x?.storagePath && /^image\/(png|jpeg|webp|gif|svg\+xml)$/.test(x.mimeType || "");
+const hasThumb = (x) => !!x?.thumbnail || previewableImage(x);
+function AssetThumbImg({ asset, className, alt = "" }) {
+  const uploaded = useFileHref(previewableImage(asset) ? asset : null);
+  const src = asset.thumbnail || uploaded;
+  return src ? <img src={src} alt={alt} loading="lazy" className={className} /> : <span className={`${className} bg-slate-100 animate-pulse`} aria-hidden="true" />;
+}
+
 function AssetCard({ asset }) {
   const { openPreview, copyLink } = useWS();
   return (
-    <div className="group bg-white border border-slate-200 rounded-xl overflow-hidden hover:border-slate-300 hover:shadow-md transition-shadow flex flex-col">
+    <div className="group bg-white border border-slate-200 rounded-xl overflow-hidden hover:border-slate-300 hover:shadow-md transition-shadow flex flex-col" data-asset-card={asset.id}>
       <button type="button" onClick={() => openPreview("asset", asset.id)} className="block w-full bg-slate-50 border-b border-slate-100" style={{ aspectRatio: "16 / 10" }} aria-label={`${asset.name} önizle`}>
-        {asset.thumbnail ? <img src={asset.thumbnail} alt={asset.name} className="w-full h-full object-cover" /> : <span className="w-full h-full flex items-center justify-center"><FileTypeTile type={asset.type} size={48} /></span>}
+        {hasThumb(asset) ? <AssetThumbImg asset={asset} alt={asset.name} className="block w-full h-full object-cover" /> : <span className="w-full h-full flex items-center justify-center"><FileTypeTile type={asset.type} size={48} /></span>}
       </button>
       <div className="p-3 flex-1 flex flex-col gap-2">
         <div className="min-w-0">
@@ -2225,8 +2354,8 @@ function AssetCard({ asset }) {
         </div>
         <div className="flex items-center gap-1 pt-1 mt-auto border-t border-slate-100">
           <button type="button" onClick={() => openPreview("asset", asset.id)} className="flex-1 h-7 inline-flex items-center justify-center gap-1 rounded-md cw-11 font-medium text-slate-600 hover:bg-slate-100"><Eye size={12} />Önizle</button>
-          <a href={asset.driveUrl} target="_blank" rel="noopener noreferrer" className="flex-1 h-7 inline-flex items-center justify-center gap-1 rounded-md cw-11 font-medium text-slate-600 hover:bg-slate-100"><ExternalLink size={12} />Drive'da Aç</a>
-          <button type="button" onClick={() => copyLink(asset.driveUrl)} className="h-7 w-7 inline-flex items-center justify-center rounded-md text-slate-500 hover:bg-slate-100" aria-label="Bağlantıyı Kopyala" title="Bağlantıyı Kopyala"><Copy size={12} /></button>
+          <FileOpenLink item={asset} className="flex-1 h-7 inline-flex items-center justify-center gap-1 rounded-md cw-11 font-medium text-slate-600 hover:bg-slate-100" label={`${asset.name} — ${openLabel(asset)}`}><ExternalLink size={12} />{asset.storagePath ? "Aç" : "Drive'da Aç"}</FileOpenLink>
+          {asset.driveUrl && <button type="button" onClick={() => copyLink(asset.driveUrl)} className="h-7 w-7 inline-flex items-center justify-center rounded-md text-slate-500 hover:bg-slate-100" aria-label="Bağlantıyı Kopyala" title="Bağlantıyı Kopyala"><Copy size={12} /></button>}
         </div>
       </div>
     </div>
@@ -2237,7 +2366,7 @@ function AssetListRow({ asset, showFolder }) {
   const { openPreview, copyLink } = useWS();
   return (
     <div className="flex items-center gap-3 px-3 py-2.5 border-b border-slate-100 last:border-0 hover:bg-slate-50">
-      {asset.thumbnail ? <img src={asset.thumbnail} alt="" className="h-9 w-9 rounded-lg object-cover shrink-0" /> : <FileTypeTile type={asset.type} size={36} />}
+      {hasThumb(asset) ? <AssetThumbImg asset={asset} className="h-9 w-9 rounded-lg object-cover shrink-0" /> : <FileTypeTile type={asset.type} size={36} />}
       <button type="button" onClick={() => openPreview("asset", asset.id)} className="flex-1 min-w-0 text-left">
         <p className="cw-12 font-semibold text-slate-900 truncate hover:text-orange-700">{asset.name}</p>
         <p className="cw-11 text-slate-400 truncate">{asset.type} · {asset.size}{showFolder ? ` · ${FOLDER_BY_ID[asset.folderId]?.name}` : ""}</p>
@@ -2247,16 +2376,17 @@ function AssetListRow({ asset, showFolder }) {
       <span className="hidden sm:block"><ApprovalBadge status={asset.approvalStatus} /></span>
       <div className="flex items-center gap-0.5">
         <button type="button" onClick={() => openPreview("asset", asset.id)} className="p-1.5 rounded-md text-slate-400 hover:text-slate-800 hover:bg-slate-100" aria-label="Önizle" title="Önizle"><Eye size={14} /></button>
-        <a href={asset.driveUrl} target="_blank" rel="noopener noreferrer" className="p-1.5 rounded-md text-slate-400 hover:text-orange-600 hover:bg-orange-50" aria-label="Drive'da Aç" title="Drive'da Aç"><ExternalLink size={14} /></a>
-        <button type="button" onClick={() => copyLink(asset.driveUrl)} className="p-1.5 rounded-md text-slate-400 hover:text-slate-800 hover:bg-slate-100" aria-label="Bağlantıyı Kopyala" title="Bağlantıyı Kopyala"><Copy size={14} /></button>
+        <FileOpenLink item={asset} className="p-1.5 rounded-md text-slate-400 hover:text-orange-600 hover:bg-orange-50" label={asset.storagePath ? `${asset.name} dosyasını aç` : "Drive'da Aç"}><ExternalLink size={14} /></FileOpenLink>
+        {asset.driveUrl && <button type="button" onClick={() => copyLink(asset.driveUrl)} className="p-1.5 rounded-md text-slate-400 hover:text-slate-800 hover:bg-slate-100" aria-label="Bağlantıyı Kopyala" title="Bağlantıyı Kopyala"><Copy size={14} /></button>}
       </div>
     </div>
   );
 }
 
-function AssetCollection({ assets, view, showFolder, emptyText, onAdd }) {
+function AssetCollection({ assets, view, showFolder, emptyText, onAdd, upload }) {
   if (!assets.length) {
-    return <EmptyBlock icon={FolderOpen} title={emptyText} text="Dosyalar Google Drive'da saklanır; buraya yalnızca bağlantısı eklenir." action={onAdd ? <Btn variant="primary" onClick={onAdd}><LinkIcon size={14} />Drive Bağlantısı Ekle</Btn> : null} />;
+    const actions = (upload || onAdd) ? <div className="flex flex-wrap justify-center gap-2">{upload}{onAdd && <Btn variant={upload ? "secondary" : "primary"} onClick={onAdd}><LinkIcon size={14} />Drive Bağlantısı Ekle</Btn>}</div> : null;
+    return <EmptyBlock icon={FolderOpen} title={emptyText} text={upload ? "Bilgisayarınızdan dosya yükleyin veya Google Drive bağlantısı ekleyin. Dosyaları bu alana sürükleyip de bırakabilirsiniz." : "Dosyalar Google Drive'da saklanır; buraya yalnızca bağlantısı eklenir."} action={actions} />;
   }
   if (view === "list") {
     return <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">{assets.map((a) => <AssetListRow key={a.id} asset={a} showFolder={showFolder} />)}</div>;
@@ -2265,12 +2395,23 @@ function AssetCollection({ assets, view, showFolder, emptyText, onAdd }) {
 }
 
 function BrandFiles({ selectedBrandId, onSelectBrand, folderId, setFolderId, onAddAsset }) {
-  const { state, brandsById } = useWS();
+  const { state, brandsById, dispatch, notify, filesApi, previewOnly } = useWS();
   const [q, setQ] = useState("");
   const [approval, setApproval] = useState("all");
   const [view, setView] = useState("grid");
   const brand = brandsById[selectedBrandId];
   const folder = folderId ? FOLDER_BY_ID[folderId] : null;
+  // Manuel yükleme: dosya yöneticisi izni olanlar (Drive bağlantısı ekleyebilenler); sunucu marka erişimini ayrıca denetler (014).
+  const canUpload = !!onAddAsset && !!filesApi && !previewOnly && !!brand;
+  const uploads = useUploads(
+    (file, opts) => filesApi.uploadAsset(brand.id, folder?.id || null, file, { ...opts, userId: ME }),
+    (rec) => {
+      dispatch({ type: "REMOTE_UPSERT", remote: true, collection: "assets", item: rec });
+      notify(`“${rec.name}” ${FOLDER_BY_ID[rec.folderId]?.name || "marka"} klasörüne yüklendi.`);
+    },
+  );
+  const [dropProps, dropping] = useFileDrop(uploads.add, canUpload);
+  const uploadBtn = (variant) => canUpload ? <UploadTrigger accept={acceptOf(BRAND_FILE_TYPES)} onFiles={uploads.add} variant={variant} name="brand-files" label="Dosya Yükle" /> : null;
   const brandAssets = useMemo(() => (brand ? state.assets.filter((a) => a.brandId === brand.id) : EMPTY), [state.assets, brand]);
   const filterAsset = (a) => (approval === "all" || a.approvalStatus === approval) && (!q || norm(a.name).includes(norm(q)));
 
@@ -2313,14 +2454,18 @@ function BrandFiles({ selectedBrandId, onSelectBrand, folderId, setFolderId, onA
   const driveLink = brandDriveLink(brand);
 
   return (
-    <div className="space-y-4">
+    <div {...dropProps} data-brand-files="" className={`relative space-y-4 rounded-xl ${dropping ? "ring-2 ring-orange-400 ring-offset-4 bg-orange-50/50" : ""}`}>
+      {dropping && <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl pointer-events-none"><span className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white shadow cw-13 font-semibold text-orange-700"><Upload size={15} />{folder ? `${folder.name} klasörüne` : "Markaya"} yüklemek için bırakın</span></div>}
       <div className="flex flex-wrap items-center justify-between gap-3">
         {crumbs}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {driveLink && <a href={driveLink} target="_blank" rel="noopener noreferrer" className="h-8 inline-flex items-center gap-1.5 px-2.5 rounded-lg border border-slate-200 bg-white cw-12 font-semibold text-slate-700 hover:bg-slate-50"><ExternalLink size={13} />Drive'da Aç</a>}
-          {onAddAsset && <Btn size="sm" variant="primary" onClick={() => onAddAsset(folder ? folder.id : "gorseller")}><LinkIcon size={13} />Drive Bağlantısı Ekle</Btn>}
+          {onAddAsset && <Btn size="sm" variant={canUpload ? "secondary" : "primary"} onClick={() => onAddAsset(folder ? folder.id : "gorseller")}><LinkIcon size={13} />Drive Bağlantısı Ekle</Btn>}
+          {uploadBtn("primary")}
         </div>
       </div>
+      {canUpload && <p className="-mt-2 cw-11 text-slate-400">Görsel, logo / vektör, video, PDF, font, ZIP, Word / PowerPoint · en fazla {MAX_UPLOAD_BYTES / 1024 / 1024} MB · {folder ? `“${folder.name}” klasörüne yüklenir` : "türüne göre ilgili klasöre yüklenir"}</p>}
+      <UploadQueue uploads={uploads} />
 
       <div className="flex flex-wrap items-center gap-2">
         <label className="flex items-center gap-2 h-8 px-2.5 rounded-lg border border-slate-200 bg-white flex-1 min-w-48 max-w-sm focus-within:border-orange-300">
@@ -2339,7 +2484,7 @@ function BrandFiles({ selectedBrandId, onSelectBrand, folderId, setFolderId, onA
       </div>
 
       {folder ? (
-        <AssetCollection assets={folderAssets} view={view} emptyText={q || approval !== "all" ? "Bu klasörde eşleşen dosya yok." : "Bu klasör henüz boş."} onAdd={onAddAsset ? () => onAddAsset(folder.id) : null} />
+        <AssetCollection assets={folderAssets} view={view} emptyText={q || approval !== "all" ? "Bu klasörde eşleşen dosya yok." : "Bu klasör henüz boş."} onAdd={onAddAsset ? () => onAddAsset(folder.id) : null} upload={uploadBtn("primary")} />
       ) : searchResults ? (
         <>
           <p className="cw-12 text-slate-500">{searchResults.length} dosya bulundu</p>
@@ -2571,8 +2716,9 @@ function PropertyRow({ icon: Icon, label, children }) {
 }
 
 function AttachmentsSection({ task }) {
-  const { state, dispatch, attachmentsByTask, openPreview, notify, can: allowed } = useWS();
+  const { state, dispatch, attachmentsByTask, openPreview, notify, can: allowed, filesApi, previewOnly } = useWS();
   const canEdit = allowed("canEditContent");
+  const canUpload = canEdit && !!filesApi && !previewOnly; // sunucu ayrıca görev erişimini denetler (014)
   const [mode, setMode] = useState(null);
   const [q, setQ] = useState("");
   const [name, setName] = useState("");
@@ -2581,7 +2727,17 @@ function AttachmentsSection({ task }) {
   const [internal, setInternal] = useState(false);
   const items = attachmentsByTask[task.id] || EMPTY;
   const attachedAssetIds = new Set(items.map((a) => a.assetId).filter(Boolean));
-  const brandAssets = state.assets.filter((a) => a.brandId === task.brandId && (!q || norm(a.name).includes(norm(q))));
+  // Yüklenen marka dosyaları göreve bağlantı olarak eklenemez (dosya marka kovasında); onlar göreve doğrudan yüklenir.
+  const brandAssets = state.assets.filter((a) => a.brandId === task.brandId && a.driveUrl && (!q || norm(a.name).includes(norm(q))));
+  const uploads = useUploads(
+    (file, opts) => filesApi.uploadAttachment(task, file, { ...opts, internal, userId: ME }),
+    (rec) => {
+      dispatch({ type: "REMOTE_UPSERT", remote: true, collection: "attachments", item: rec });
+      dispatch({ type: "LOG", taskId: task.id, text: `“${rec.name}” dosyasını yükledi` });
+      notify(`“${rec.name}” yüklendi${rec.internal ? " (yalnızca ekip görür)" : ""}.`);
+    },
+  );
+  const [dropProps, dropping] = useFileDrop(uploads.add, canUpload);
   const addFromAsset = (asset) => {
     if (dispatch({ type: "ADD_ATTACHMENT", attachment: { id: uid(), taskId: task.id, assetId: asset.id, name: asset.name, type: asset.type, size: asset.size, thumbnail: asset.thumbnail, driveUrl: asset.driveUrl, addedBy: ME, createdAt: new Date().toISOString(), internal } })) notify(`“${asset.name}” göreve eklendi${internal ? " (yalnızca ekip görür)" : ""}.`);
   };
@@ -2595,15 +2751,20 @@ function AttachmentsSection({ task }) {
     notify("Drive bağlantısı göreve eklendi.");
   };
   return (
-    <section>
+    <section {...dropProps} data-attachments="" className={`relative rounded-xl transition-colors ${dropping ? "ring-2 ring-orange-400 ring-offset-4 bg-orange-50/60" : ""}`}>
+      {dropping && <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl pointer-events-none"><span className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white shadow cw-13 font-semibold text-orange-700"><Upload size={15} />Dosyaları buraya bırakın</span></div>}
       <SectionTitle icon={Paperclip} right={canEdit &&
-        <div className="flex gap-1">
+        <div className="flex flex-wrap justify-end gap-1">
+          {canUpload && <UploadTrigger accept={acceptOf(TASK_FILE_TYPES)} onFiles={uploads.add} variant="primary" name="attachments" />}
           <Btn size="sm" variant={mode === "assets" ? "primary" : "secondary"} onClick={() => setMode(mode === "assets" ? null : "assets")}><FolderOpen size={13} />Marka Dosyalarından</Btn>
           <Btn size="sm" variant={mode === "link" ? "primary" : "secondary"} onClick={() => setMode(mode === "link" ? null : "link")}><LinkIcon size={13} />Bağlantı</Btn>
         </div>
       }>Ekler ({items.length})</SectionTitle>
 
-      {mode && (
+      {canUpload && <p className="-mt-1.5 mb-2 cw-11 text-slate-400">Görsel, video veya PDF · en fazla {MAX_UPLOAD_BYTES / 1024 / 1024} MB · sürükleyip bırakabilirsiniz</p>}
+      {uploads.items.length > 0 && <div className="mb-2"><UploadQueue uploads={uploads} /></div>}
+
+      {(mode || canUpload) && (
         <label className="mb-2 flex items-center gap-2 cw-12 text-slate-600 cursor-pointer select-none w-fit">
           <input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} className="h-3.5 w-3.5 accent-orange-600" />
           <Lock size={12} className="text-slate-400" />Yalnızca ekip görsün (müşteriden gizle)
@@ -2651,14 +2812,14 @@ function AttachmentsSection({ task }) {
                 <p className="flex items-center gap-1 cw-10 text-slate-400">{a.type} · {a.size}{a.internal && <span className="inline-flex items-center gap-0.5 text-slate-500 font-semibold" title="Müşteri bu eki görmez"><Lock size={9} />Ekip içi</span>}</p>
               </div>
               <div className="flex items-center">
-                <a href={a.driveUrl} target="_blank" rel="noopener noreferrer" className="p-1.5 rounded-md text-slate-400 hover:text-orange-600 hover:bg-orange-50" aria-label="Drive'da Aç" title="Drive'da Aç"><ExternalLink size={13} /></a>
+                <FileOpenLink item={a} className="p-1.5 rounded-md text-slate-400 hover:text-orange-600 hover:bg-orange-50" label={a.storagePath ? `${a.name} dosyasını aç` : "Drive'da Aç"}><ExternalLink size={13} /></FileOpenLink>
                 {canEdit && <button type="button" onClick={() => { if (dispatch({ type: "REMOVE_ATTACHMENT", id: a.id })) notify("Ek kaldırıldı."); }} className="p-1.5 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50" aria-label={`${a.name} ekini kaldır`} title="Kaldır"><X size={13} /></button>}
               </div>
             </div>
           ))}
         </div>
       ) : (
-        <p className="cw-12 text-slate-400 py-2">Bu göreve henüz dosya eklenmemiş.</p>
+        <p className="cw-12 text-slate-400 py-2">Bu göreve henüz dosya eklenmemiş.{canUpload ? " “Dosya Yükle” ile bilgisayarınızdan seçin veya dosyaları buraya sürükleyin." : ""}</p>
       )}
     </section>
   );
@@ -3780,7 +3941,9 @@ function FilePreviewModal({ kind, id, onClose }) {
   const { state, dispatch, brandsById, copyLink, notify, can: allowed } = useWS();
   const [embed, setEmbed] = useState(false);
   const item = kind === "asset" ? state.assets.find((a) => a.id === id) : state.attachments.find((a) => a.id === id);
+  const fileHref = useFileHref(item?.storagePath ? item : null);
   if (!item) return null;
+  if (item.storagePath) return <UploadedFilePreview kind={kind} item={item} href={fileHref} onClose={onClose} />;
   const embedUrl = drivePreviewUrl(item.driveUrl);
   const task = kind === "attachment" ? state.tasks.find((t) => t.id === item.taskId) : null;
   const rows = kind === "asset"
@@ -3835,6 +3998,56 @@ function FilePreviewModal({ kind, id, onClose }) {
               <button type="button" onClick={() => copyLink(item.driveUrl)} className="h-8 w-8 flex items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50" aria-label="Bağlantıyı Kopyala"><Copy size={13} /></button>
             </div>
           </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* Yüklenen dosyanın önizlemesi: görsel, video oynatıcı veya PDF görüntüleyici; açma ve indirme süreli adresle. */
+function UploadedFilePreview({ kind, item, href, onClose }) {
+  const { state, dispatch, brandsById, notify, can: allowed } = useWS();
+  const task = kind === "attachment" ? state.tasks.find((t) => t.id === item.taskId) : null;
+  const rows = kind === "asset"
+    ? [["Marka", brandsById[item.brandId]?.name], ["Klasör", FOLDER_BY_ID[item.folderId]?.name], ["Tür", item.type], ["Boyut", item.size], ["Yükleyen", USER_BY_ID[item.owner]?.name], ["Güncellenme", fmtDateLong(item.updatedAt)]]
+    : [["Görev", task?.title || "—"], ["Tür", item.type], ["Boyut", item.size], ["Yükleyen", USER_BY_ID[item.addedBy]?.name], ["Yüklenme", fmtDateTime(item.createdAt)], ["Görünürlük", item.internal ? "Yalnızca ekip" : "Ekip ve müşteri"]];
+  const mime = item.mimeType || "";
+  let body;
+  if (!href) body = <p className="py-16 cw-12 text-slate-400" role="status">Dosya hazırlanıyor…</p>;
+  else if (previewableImage(item)) body = <img src={href} alt={item.name} className="w-full h-full object-contain" style={{ maxHeight: 420 }} />;
+  else if (mime.startsWith("video/")) body = <video src={href} controls preload="metadata" className="w-full bg-black" style={{ maxHeight: 420 }} aria-label={`${item.name} videosu`} />;
+  else if (mime === "application/pdf") body = <iframe src={href} title={`${item.name} önizlemesi`} className="w-full border-0 bg-white" style={{ height: 420 }} />;
+  else body = <div className="flex flex-col items-center gap-3 py-10 px-4 text-center"><FileTypeTile type={item.type} size={64} /><p className="cw-12 text-slate-500">Bu dosya türü tarayıcıda önizlenemez. İndirip açabilirsiniz.</p></div>;
+  return (
+    <Modal title={item.name} subtitle={kind === "asset" ? "Marka dosyası · Yüklenen dosya" : "Görev eki · Yüklenen dosya"} onClose={onClose} width={760}
+      footer={href ? (
+        <>
+          <a href={href} download={item.name} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg border border-slate-200 bg-white text-slate-700 cw-13 font-semibold hover:bg-slate-50"><Download size={14} />İndir</a>
+          <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg bg-orange-600 text-white cw-13 font-semibold hover:bg-orange-700"><ExternalLink size={14} />Yeni Sekmede Aç</a>
+        </>
+      ) : null}>
+      <div className="grid gap-5 md:grid-cols-5" data-uploaded-preview={mime}>
+        <div className="md:col-span-3 rounded-xl border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center" style={{ minHeight: 220 }}>{body}</div>
+        <div className="md:col-span-2 space-y-3">
+          <dl className="space-y-2">
+            {rows.map(([k, v]) => (
+              <div key={k} className="flex items-start justify-between gap-3 cw-12">
+                <dt className="text-slate-500">{k}</dt>
+                <dd className="text-slate-900 font-medium text-right break-words min-w-0">{v || "—"}</dd>
+              </div>
+            ))}
+          </dl>
+          {kind === "asset" && allowed("canManageAssets") ? (
+            <div className="pt-3 border-t border-slate-100">
+              <p className="cw-12 text-slate-500 mb-1.5">Onay Durumu</p>
+              <div className="flex flex-wrap gap-1.5">
+                {APPROVALS.map((a) => (
+                  <button key={a} type="button" onClick={() => { if (a !== item.approvalStatus && dispatch({ type: "UPDATE_ASSET", id: item.id, patch: { approvalStatus: a } })) notify(`Onay durumu “${a}” olarak güncellendi.`); }} className={`h-7 px-2.5 rounded-md border cw-11 font-semibold ${item.approvalStatus === a ? APPROVAL_META[a] : "border-slate-200 text-slate-500 hover:bg-slate-50"}`} aria-pressed={item.approvalStatus === a}>{a}</button>
+                ))}
+              </div>
+            </div>
+          ) : kind === "asset" ? <div className="pt-3 border-t border-slate-100 flex items-center justify-between cw-12"><span className="text-slate-500">Onay Durumu</span><ApprovalBadge status={item.approvalStatus} /></div> : null}
+          <p className="pt-3 border-t border-slate-100 cw-11 text-slate-400">Dosya panelin güvenli deposunda saklanır; bağlantılar yalnızca yetkili kişilere ve kısa süreliğine açılır.</p>
         </div>
       </div>
     </Modal>
@@ -5647,7 +5860,7 @@ function ContentDetailModal({ taskId, onClose }) {
                     <AttachmentThumb attachment={a} size={32} />
                     <span className="flex-1 min-w-0"><span className="block cw-12 font-medium text-slate-800 truncate">{a.name}</span><span className="block cw-10 text-slate-400">{a.type} · {a.size}</span></span>
                     <IconAction icon={Eye} label={`${a.name} önizle`} onClick={() => openPreview("attachment", a.id)} />
-                    <a href={a.driveUrl} target="_blank" rel="noopener noreferrer" className="h-8 w-8 inline-flex items-center justify-center rounded-md text-slate-400 hover:text-orange-600 hover:bg-orange-50" aria-label={`${a.name} dosyasını aç`}><ExternalLink size={14} /></a>
+                    <FileOpenLink item={a} className="h-8 w-8 inline-flex items-center justify-center rounded-md text-slate-400 hover:text-orange-600 hover:bg-orange-50" label={`${a.name} dosyasını aç`}><ExternalLink size={14} /></FileOpenLink>
                   </div>
                 ))}
               </div>
@@ -7491,7 +7704,7 @@ function writeViewParams(values) {
   } catch { /* adres güncellenemezse panel yine çalışır */ }
 }
 
-function Workspace({ state, dispatch, getState, createTasks, draftScope, contentApi, accountApi, agreementApi, userApi, portalSlug, portalKey, actorId, realUserId, onViewAs, allowImpersonation, push = null, onSignOut, syncError, denied, media, brandKit, checklistApi }) {
+function Workspace({ state, dispatch, getState, createTasks, draftScope, contentApi, filesApi = null, accountApi, agreementApi, userApi, portalSlug, portalKey, actorId, realUserId, onViewAs, allowImpersonation, push = null, onSignOut, syncError, denied, media, brandKit, checklistApi }) {
   const actor = state.users.find((u) => u.id === actorId) || state.users.find((u) => u.id === realUserId);
   const realUser = state.users.find((u) => u.id === realUserId);
   setDirectory(state.users, actor.id);
@@ -7662,11 +7875,13 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
     brandKitStore: brandKit,
     checklistApi: checklistsOn ? checklistApi : null, checklistIndex, ensureChecklist, submitTask,
     contentApi: state.features?.approvals ? contentApi : null,
+    // Dosya yükleme (014): Storage kovaları yoksa düğmeler gizlenir, Drive bağlantıları çalışmaya devam eder.
+    filesApi: filesApi && filesApi.available ? filesApi : null,
     // Yalnızca kendi oturumunda (önizleme değil) — sunucu ayrıca yönetici yetkisini denetler.
     userApi: actor.id === realUserId ? userApi : null,
     // Gerçek oturumda başka kullanıcı olarak önizleme yapılırken kılavuz da salt okunurdur.
     previewOnly: actor.id !== realUserId && !allowImpersonation,
-  }), [ctxState, dispatch, brandsById, commentCount, attachmentsByTask, revisionByTask, notify, updateTask, openTask, copyLink, media, actor, role, allowed, statusOptions, selectedBrandId, brandKit, realUserId, allowImpersonation, checklistsOn, checklistApi, checklistIndex, ensureChecklist, submitTask, contentApi, state.features, userApi]);
+  }), [ctxState, dispatch, brandsById, commentCount, attachmentsByTask, revisionByTask, notify, updateTask, openTask, copyLink, media, actor, role, allowed, statusOptions, selectedBrandId, brandKit, realUserId, allowImpersonation, checklistsOn, checklistApi, checklistIndex, ensureChecklist, submitTask, contentApi, filesApi, state.features, userApi]);
 
   /* Müşteri onay bağlantısı (/onay/<adres>, /onay): adres yalnızca yönlendirir, yetki vermez. Markayı kullanıcı zaten
      görebiliyorsa (RLS) o markanın onay ekranı açılır; aksi halde — marka var olsun ya da olmasın — aynı mesaj gösterilir. */
@@ -7936,7 +8151,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
 
 /* ───────────────────────── Veri kaynağı & oturum ───────────────────────── */
 
-export const demoSource = createMemorySource(createDemoState, { checklist: createMemoryChecklist(DEMO_CHECKLIST_TEMPLATES), content: createMemoryContent() });
+export const demoSource = createMemorySource(createDemoState, { checklist: createMemoryChecklist(DEMO_CHECKLIST_TEMPLATES), content: createMemoryContent(), files: createMemoryFiles() });
 demoSource.brandKit = createMemoryBrandKit(DEMO_BRAND_KITS);
 
 /* Reducer'ı yerel önbellek olarak çalıştırır (iyimser güncelleme) ve her işlemi kaynağa yazar.
@@ -8461,7 +8676,7 @@ export default function App({ source = demoSource }) {
     <Workspace
       state={state} dispatch={dispatch} getState={getState} createTasks={createTasks} draftScope={source.draftScope || null} actorId={viewAsId} realUserId={realUserId} onViewAs={viewAs}
       allowImpersonation={!!source.allowImpersonation} push={source.push || null} onSignOut={signOut} syncError={syncError} denied={denied} media={source.media || null} brandKit={brandKit}
-      checklistApi={source.checklist || null} contentApi={source.content || null} accountApi={source.account || null} agreementApi={agreementApi} userApi={userApi}
+      checklistApi={source.checklist || null} contentApi={source.content || null} filesApi={source.files || null} accountApi={source.account || null} agreementApi={agreementApi} userApi={userApi}
       portalSlug={actor?.role === "client" ? route.portal : staffFocus?.slug ?? null} portalKey={actor?.role === "client" ? loc : staffFocus?.n}
     />
   );

@@ -977,7 +977,6 @@ function GlobalStyles() {
       .cw-brand-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:start}
       @container (min-width:640px){.cw-brand-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}}
       @container (min-width:1200px){.cw-brand-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
-      .cw-brand-card{height:288px;transition:height .2s ease}.cw-brand-card[data-expanded="true"]{height:420px}
       .cw-tasks{overscroll-behavior:contain;container-type:inline-size}
       @container (max-width:400px){.cw-rev-label{display:none}}
       .cw-row{transition:background-color .15s ease}
@@ -1814,7 +1813,7 @@ function FilterSelect({ label, value, onChange, options, selectRef }) {
 /* Üst bant renk geçişi (kurumsal görsel "renk geçişi"): turkuaz → pudra → turuncu → sarı. */
 const TOPBAR_GRADIENT = "linear-gradient(90deg, #00ADA7 0%, #C298A4 33%, #EC7D46 66%, #F9DE08 100%)";
 
-function TopBar({ title, brand, filters, setFilter, onMenu, onNewTask, onBulk, showFilters = true, showAssigneeFilter = true, searchPlaceholder = "Görev, marka veya kişi ara…", eyebrow = "ÇALIŞMA ALANI", searchRef, firstFilterRef, filtersOpen, setFiltersOpen, flash, activeCount, onClear, resultCount }) {
+function TopBar({ title, brand, filters, setFilter, onMenu, onNewTask, onBulk, showFilters = true, showAssigneeFilter = true, searchPlaceholder = "Görev, marka veya kişi ara…", eyebrow = "ÇALIŞMA ALANI", searchRef, firstFilterRef, filtersOpen, setFiltersOpen, flash, activeCount, onClear, resultCount, onOpenNotification, onAllNotifications }) {
   return (
     <header className="bg-white border-b border-slate-200 shrink-0" style={{ zIndex: 30 }}>
       <div className="h-16 flex items-center gap-3 px-4 lg:px-6" style={{ background: TOPBAR_GRADIENT }} data-topbar-band="">
@@ -1837,6 +1836,7 @@ function TopBar({ title, brand, filters, setFilter, onMenu, onNewTask, onBulk, s
             )}
           </label>
         </div>
+        {onOpenNotification && <NotificationCenter onOpen={onOpenNotification} onAll={onAllNotifications} />}
         {onBulk && <Btn variant="secondary" onClick={onBulk} aria-label="Toplu Görev Ekle" title="Toplu Görev Ekle" className="px-2.5 sm:px-3.5"><Plus size={15} /><span className="hidden md:inline">Toplu Görev Ekle</span></Btn>}
         {onNewTask && <Btn variant="primary" onClick={onNewTask} aria-label="Yeni Görev" title="Yeni Görev" className="px-2.5 sm:px-3.5"><Plus size={16} strokeWidth={2.4} /><span className="hidden sm:inline">Yeni Görev</span></Btn>}
       </div>
@@ -2042,7 +2042,8 @@ function TaskRow({ task }) {
   );
 }
 
-/* Marka kartı: tüm kartlar aynı yükseklikte (420px); başlık ve alt bilgi sabit, görev listesi kendi içinde kayar. */
+/* Marka kartı: yüksekliği görev sayısına göre esner. En fazla CARD_TASK_LIMIT görev görünür; fazlası "Diğerlerini Göster" ile açılır. */
+const CARD_TASK_LIMIT = 5;
 /* Kartın başında açık iş görünür; tamamlanan / onaylanan görevler (seçili sıralamayı koruyarak) sona alınır. */
 const FINISHED = new Set(["Tamamlandı", "Onaylandı"]);
 const activeFirst = (list) => [...list.filter((t) => !FINISHED.has(t.status)), ...list.filter((t) => FINISHED.has(t.status))];
@@ -2050,12 +2051,11 @@ const activeFirst = (list) => [...list.filter((t) => !FINISHED.has(t.status)), .
 function BrandCard({ brand, tasks, onFocusBrand }) {
   const { openNewTask, can: allowed } = useWS();
   useNow(); // gecikme sayısı zamanla değişir
-  // Varsayılan olarak 1 görev; "Diğerlerini Göster" kartı aşağı doğru (en fazla 420px) açar, fazlası kart içinde kayar.
+  // 5 ve altı görevin tamamı görünür; fazlasında ilk 5 + "Diğerlerini Göster" (kart aşağı doğru uzar, iç kaydırma yok).
   const [expanded, setExpanded] = useState(false);
-  const listRef = useRef(null);
-  const extra = Math.max(0, tasks.length - 1);
+  const extra = Math.max(0, tasks.length - CARD_TASK_LIMIT);
   const open = expanded && extra > 0;
-  const toggle = () => { setExpanded((e) => !e); if (listRef.current) listRef.current.scrollTop = 0; };
+  const toggle = () => setExpanded((e) => !e);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const closeMenu = useCallback(() => setMenuOpen(false), []);
@@ -2104,9 +2104,9 @@ function BrandCard({ brand, tasks, onFocusBrand }) {
           ))}
         </dl>
       </header>
-      <div ref={listRef} id={`cw-tasks-${brand.id}`} className={`cw-tasks flex-1 min-h-0 ${open ? "overflow-y-auto" : "overflow-hidden"} cw-scroll px-1.5 py-1 divide-y divide-slate-100`} data-card-tasks="" tabIndex={0} role="region" aria-label={`${brand.name} görev listesi`}>
-        {tasks.length ? (open ? tasks : tasks.slice(0, 1)).map((t) => <TaskRow key={t.id} task={t} />) : (
-          <div className="h-full flex flex-col items-center justify-center text-center px-6">
+      <div id={`cw-tasks-${brand.id}`} className="cw-tasks px-1.5 py-1 divide-y divide-slate-100" data-card-tasks="" role="region" aria-label={`${brand.name} görev listesi`}>
+        {tasks.length ? (open ? tasks : tasks.slice(0, CARD_TASK_LIMIT)).map((t) => <TaskRow key={t.id} task={t} />) : (
+          <div className="py-8 flex flex-col items-center justify-center text-center px-6">
             <Inbox size={20} className="text-slate-300" />
             <p className="cw-12 text-slate-500 mt-2">Bu markada gösterilecek görev yok.</p>
           </div>
@@ -4403,6 +4403,45 @@ function NotificationList({ items, onOpen, compact }) {
         );
       })}
     </ul>
+  );
+}
+
+/* Üst banttaki zil: okunmamış sayısı + "Okunmamış" / "Tümü" sekmeli bildirim merkezi. Bildirime tıklayınca okundu
+   işaretlenir ve ilgili görev / içerik açılır; tam liste "Bildirimler" sayfasındadır. */
+function NotificationCenter({ onOpen, onAll }) {
+  const { state, dispatch, notify } = useWS();
+  const [anchor, setAnchor] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("unread");
+  const close = useCallback(() => setOpen(false), []);
+  const sorted = useMemo(() => [...state.notifications].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [state.notifications]);
+  const unread = sorted.filter((n) => !n.readAt);
+  const list = (filter === "unread" ? unread : sorted).slice(0, 30);
+  const toggle = () => { if (!open) setFilter(unread.length ? "unread" : "all"); setOpen((o) => !o); };
+  const markAll = () => { if (dispatch({ type: "MARK_NOTIFICATIONS_READ", ids: unread.map((n) => n.id) })) notify("Tüm bildirimler okundu olarak işaretlendi."); };
+  return (
+    <>
+      <button type="button" ref={setAnchor} onClick={toggle} aria-expanded={open} aria-haspopup="dialog" data-notification-bell=""
+        aria-label={unread.length ? `Bildirimler, ${unread.length} okunmamış` : "Bildirimler"} title="Bildirimler"
+        className={`relative shrink-0 h-9 w-9 flex items-center justify-center rounded-lg text-slate-900 hover:bg-white/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-white ${open ? "bg-white/40" : ""}`}>
+        <Bell size={18} />
+        {unread.length > 0 && <span className="absolute -top-0.5 -right-0.5 h-4 min-w-4 px-1 rounded-full bg-red-600 text-white cw-10 font-bold leading-4 text-center ring-2 ring-white" aria-hidden="true">{unread.length > 99 ? "99+" : unread.length}</span>}
+      </button>
+      <Floating anchorEl={anchor} open={open} onClose={close} width={360} placement="bottom-end" label="Bildirim merkezi">
+        <div data-notification-center="">
+          <div className="flex items-center justify-between gap-2 px-3 pt-3 pb-2">
+            <p className="cw-13 font-bold text-slate-900">Bildirimler</p>
+            <button type="button" onClick={markAll} disabled={!unread.length} className="cw-11 font-semibold text-orange-700 hover:underline disabled:text-slate-300 disabled:no-underline">Tümünü okundu say</button>
+          </div>
+          <div className="px-3 pb-2"><Segmented ariaLabel="Bildirim filtresi" value={filter} onChange={setFilter} items={[["unread", "Okunmamış", unread.length], ["all", "Tümü", sorted.length]]} /></div>
+          <div className="max-h-96 overflow-y-auto cw-scroll px-2 border-t border-slate-100">
+            {list.length ? <NotificationList items={list} compact onOpen={(n) => { setOpen(false); onOpen(n); }} />
+              : <p className="cw-12 text-slate-500 text-center py-8">{filter === "unread" ? "Okunmamış bildiriminiz yok." : "Henüz bildirim yok."}</p>}
+          </div>
+          <button type="button" onClick={() => { setOpen(false); onAll(); }} className="w-full h-10 border-t border-slate-100 cw-12 font-semibold text-slate-600 hover:bg-slate-50 rounded-b-lg">Tüm bildirimleri gör</button>
+        </div>
+      </Floating>
+    </>
   );
 }
 
@@ -7649,10 +7688,10 @@ const SEARCH_PLACEHOLDERS = {
   users: "Kullanıcı veya e-posta ara…", agreement: "Kullanıcı ara…", notifications: "Bildirimlerde ara…", "client-home": "İçeriklerimde ara…", content: "İçeriklerimde ara…", pending: "Onay bekleyenlerde ara…", "client-files": "Görev, marka veya kişi ara…", "client-kit": "İçeriklerimde ara…", "client-history": "Onay geçmişinde ara…",
 };
 
-/* Sayfa yenilenince (Ctrl+R) kalınan ekran korunur: sayfa, sekme, marka, açık görev detayı / içerik ve Toplu Görev Ekle
-   adres satırındaki sorgu parametrelerinde tutulur (?sayfa=social&gorev=<id>…). Adres history.replaceState ile güncellenir:
+/* Sayfa yenilenince (Ctrl+R) kalınan ekran korunur: sayfa, sekme, marka, açık görev detayı / içerik, Toplu Görev Ekle ve
+   Marka Dosyaları'nda açık klasör adres satırındaki sorgu parametrelerinde tutulur (?sayfa=social&gorev=<id>…). Adres history.replaceState ile güncellenir:
    geri tuşu geçmişi şişmez, yönlendirme kararları (router.js, yalnızca yol) etkilenmez. Geçersiz / yetkisiz değerler yok sayılır. */
-const VIEW_PARAMS = ["sayfa", "sekme", "marka", "gorev", "icerik", "toplu"];
+const VIEW_PARAMS = ["sayfa", "sekme", "marka", "gorev", "icerik", "toplu", "klasor"];
 const VIEW_TABS = new Set(["feed", "table", "files", "kit"]);
 function readViewParams() {
   try { return Object.fromEntries(VIEW_PARAMS.map((k) => [k, new URLSearchParams(window.location.search).get(k) || ""])); }
@@ -7699,7 +7738,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [flash, setFlash] = useState(false);
   const [overviewOpen, setOverviewOpen] = useState(true);
-  const [folderId, setFolderId] = useState(null);
+  const [folderId, setFolderId] = useState(() => (FOLDER_BY_ID[initialView.klasor] ? initialView.klasor : null));
   const [toast, setToast] = useState(null);
   const [override, setOverride] = useState(null);
   const [passwordOpen, setPasswordOpen] = useState(false);
@@ -7720,8 +7759,9 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
       gorev: drawer?.id || "",
       icerik: contentId || "",
       toplu: bulkOpen ? "1" : "",
+      klasor: folderId && selectedBrandId !== "all" ? folderId : "",
     });
-  }, [currentPage, tab, defaultTab, role, selectedBrandId, drawer, contentId, bulkOpen]);
+  }, [currentPage, tab, defaultTab, role, selectedBrandId, drawer, contentId, bulkOpen, folderId]);
 
   const notify = useCallback((text, tone = "success") => {
     clearTimeout(toastTimer.current);
@@ -8030,6 +8070,8 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
             showAssigneeFilter={perms.has("canAssignTasks")}
             searchPlaceholder={SEARCH_PLACEHOLDERS[currentPage]}
             eyebrow={role === "client" ? "MÜŞTERİ PORTALI" : "ÇALIŞMA ALANI"}
+            onOpenNotification={openNotification}
+            onAllNotifications={() => { closeOverlays(); setPage("notifications"); scrollTop(); }}
             searchRef={searchRef}
             firstFilterRef={firstFilterRef}
             filtersOpen={filtersOpen}

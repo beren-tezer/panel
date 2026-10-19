@@ -24,7 +24,8 @@
     "test:ui:pwa": "node --experimental-websocket tests/ui-pwa.mjs",
     "test:ui:invite": "node --experimental-websocket tests/ui-invite.mjs",
     "test:ui:multi": "node --experimental-websocket tests/ui-multi.mjs",
-    "test:ui:files": "node --experimental-websocket tests/ui-files.mjs"
+    "test:ui:files": "node --experimental-websocket tests/ui-files.mjs",
+    "test:ui:revize": "node --experimental-websocket tests/ui-revize.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",

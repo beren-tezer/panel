@@ -27,18 +27,18 @@ try {
   await waitFor(() => page(`return $$("[data-brand-card]").length > 0;`));
 
   /* ── 14. Pano: göstergeler, kart boyutları ve bağımsız kaydırma korunur ── */
-  // Kartlar varsayılan olarak 1 görev gösterir; "Diğerlerini Göster" ile açılan kartlarda tüm görevler kart içinde kayar.
+  // Kartlar en fazla 5 görev gösterir; "Diğerlerini Göster" ile açılan kart tüm görevleri gösterecek kadar uzar.
   await page(`$$("[data-card-toggle][aria-expanded='false']").forEach((b) => b.click()); await tick(400); return true;`);
   const board = await page(`const cards = $$("[data-brand-card]"); return {
     indicators: $$("[data-checklist-indicator]").length,
     sample: $("[data-checklist-indicator]")?.getAttribute("title"),
     heights: new Set(cards.map((c) => Math.round(c.getBoundingClientRect().height))).size,
     h: Math.round(cards[0].getBoundingClientRect().height),
-    scroll: $$("[data-card-tasks]").every((el) => getComputedStyle(el).overflowY === "auto"),
+    all: $$("[data-card-tasks]").every((el) => el.scrollHeight <= el.clientHeight + 1),
     rows: $$("[data-task-row]").filter((r) => r.scrollWidth > r.clientWidth + 1).length,
   };`);
   check("Pano: kontrol göstergesi görünür (Kontrol: x/y)", board.indicators > 10 && /^Kontrol: \d+\/\d+/.test(board.sample), JSON.stringify(board));
-  check("Açılan marka kartları eşit (420px), görev listesi kendi içinde kayar, satır taşması yok", board.heights === 1 && board.h === 420 && board.scroll && board.rows === 0, JSON.stringify(board));
+  check("Açılan marka kartları tüm görevleri gösterir (iç kaydırma yok), satır taşması yok", board.all && board.rows === 0, JSON.stringify(board));
 
   /* ── Çalışan: Ayşe Demir ── */
   await switchRole("employee", "u2");

@@ -94,25 +94,25 @@ try {
   await send("Page.navigate", { url: `http://localhost:${PORT}/?demo` });
   await waitFor(() => page(`return $$("[data-brand-card]").length > 0;`));
 
-  /* ── 0. Kart kuralı: varsayılan 1 görev + "Diğerlerini Göster"; açılınca kart aşağı doğru açılır, içeride kayar ── */
+  /* ── 0. Kart kuralı: 5 ve altı görevin tamamı; fazlasında ilk 5 + "Diğerlerini Göster"; kart görev sayısına göre esner ── */
   const collapsed = await page(`const cs = $$("[data-brand-card]"); return {
-    maxRows: Math.max(...cs.map((c) => c.querySelectorAll("[data-task-row]").length)),
-    heights: [...new Set(cs.map((c) => Math.round(rect(c).h)))],
+    wrong: cs.filter((c) => { const n = +((c.querySelector("p").textContent.match(/(\\d+) görev/) || [0, 0])[1]); return c.querySelectorAll("[data-task-row]").length !== Math.min(n, 5) || !!c.querySelector("[data-card-toggle]") !== n > 5; }).length,
+    spaH: Math.round(rect(card("Sofra Pide")).h),
     toggle: card("Sofra Pide").querySelector("[data-card-toggle]")?.textContent.trim(),
     total: card("Sofra Pide").querySelector("p").textContent };`);
   const spaTotal = Number((collapsed.total.match(/(\d+) görev/) || [])[1]);
-  check("Kartlarda varsayılan en fazla 1 görev; tüm kartlar aynı yükseklikte", collapsed.maxRows === 1 && collapsed.heights.length === 1, JSON.stringify(collapsed));
-  check("“Diğerlerini Göster (N)” kalan görev sayısını gösterir", collapsed.toggle === `Diğerlerini Göster (${spaTotal - 1})`, collapsed.toggle);
+  check("Kartlarda 5 ve altı görevin tamamı, fazlasında ilk 5 görünür", spaTotal > 5 && collapsed.wrong === 0, JSON.stringify(collapsed));
+  check("“Diğerlerini Göster (N)” kalan görev sayısını gösterir", collapsed.toggle === `Diğerlerini Göster (${spaTotal - 5})`, collapsed.toggle);
   const cardOpen = await page(`const c = card("Sofra Pide"), other = card("Tepe Emlak"), h0 = rect(other).h;
     c.querySelector("[data-card-toggle]").click(); await new Promise((r) => setTimeout(r, 400));
     const list = c.querySelector("[data-card-tasks]");
-    return { rows: c.querySelectorAll("[data-task-row]").length, h: Math.round(rect(c).h), otherSame: Math.abs(rect(other).h - h0) < 1, scroll: list.scrollHeight > list.clientHeight,
+    return { rows: c.querySelectorAll("[data-task-row]").length, h: Math.round(rect(c).h), otherSame: Math.abs(rect(other).h - h0) < 1, scroll: list.scrollHeight > list.clientHeight + 1,
       label: c.querySelector("[data-card-toggle]").textContent.trim(), expanded: c.querySelector("[data-card-toggle]").getAttribute("aria-expanded") };`);
-  check("Açılınca tüm görevler kart içinde kayar; kart sınırlı (420px) açılır, komşu kartlar değişmez",
-    cardOpen.rows === spaTotal && cardOpen.h === 420 && cardOpen.otherSame && cardOpen.scroll && cardOpen.expanded === "true" && cardOpen.label === "Daha Az Göster", JSON.stringify(cardOpen));
+  check("Açılınca tüm görevler görünür; kart aşağı doğru uzar (iç kaydırma yok), komşu kart değişmez",
+    cardOpen.rows === spaTotal && cardOpen.h > collapsed.spaH && cardOpen.otherSame && !cardOpen.scroll && cardOpen.expanded === "true" && cardOpen.label === "Daha Az Göster", JSON.stringify(cardOpen));
   const closed = await page(`const c = card("Sofra Pide"); c.querySelector("[data-card-toggle]").click(); await new Promise((r) => setTimeout(r, 400));
     return { rows: c.querySelectorAll("[data-task-row]").length, h: Math.round(rect(c).h) };`);
-  check("“Daha Az Göster” kartı tekrar 1 göreve indirir", closed.rows === 1 && closed.h === collapsed.heights[0], JSON.stringify(closed));
+  check("“Daha Az Göster” kartı tekrar 5 göreve indirir", closed.rows === 5 && closed.h === collapsed.spaH, JSON.stringify(closed));
   // Aşağıdaki kontroller (eski davranış: kartın tüm görevleri) için kartlar açılır.
   await expandAll();
 
@@ -142,14 +142,13 @@ try {
   const counts = await page(`return { cre: card("Atlas Ajans").querySelectorAll("[data-task-row]").length, spa: card("Sofra Pide").querySelectorAll("[data-task-row]").length };`);
   check("Kurulum: 2 ve 25 görevli kartlar", counts.cre === 2 && counts.spa === 25, JSON.stringify(counts));
 
-  /* ── 1. Eşit kart ölçüleri ve iç kaydırma ── */
-  // Açılma animasyonu (0,2 sn) bitene kadar beklenir; kartlar kendiliğinden kapanırsa bu bekleme başarısız olur.
+  /* ── 1. Kart ölçüleri: genişlik eşit, yükseklik görev sayısına göre ── */
   const settled = await waitFor(() => page(`const cs = $$("[data-brand-card]").filter((c) => c.querySelector("[data-card-toggle]"));
-    return cs.every((c) => c.dataset.expanded === "true" && Math.round(rect(c).h) === 420) ? true : null;`), 3000).catch(() => false);
+    return cs.every((c) => c.dataset.expanded === "true") ? true : null;`), 3000).catch(() => false);
   if (!settled) console.log("   kart durumu:", await page(`return JSON.stringify($$("[data-brand-card]").map((c) => [c.dataset.expanded, Math.round(rect(c).h)]));`));
-  const dims = await page(`const a = rect(card("Atlas Ajans")), b = rect(card("Sofra Pide")); const all = $$("[data-brand-card]").map(rect); return { a, b, heights: [...new Set(all.map((r) => Math.round(r.h)))], widths: [...new Set(all.map((r) => Math.round(r.w)))] };`);
-  check("2 ve 25 görevli kart aynı dış ölçüde", Math.round(dims.a.w) === Math.round(dims.b.w) && Math.round(dims.a.h) === Math.round(dims.b.h), `${Math.round(dims.a.w)}×${Math.round(dims.a.h)} / ${Math.round(dims.b.w)}×${Math.round(dims.b.h)}`);
-  check("Tüm kartlar aynı yükseklik ve genişlikte", dims.heights.length === 1 && dims.widths.length === 1, `yükseklik ${dims.heights} genişlik ${dims.widths}`);
+  const dims = await page(`const a = rect(card("Atlas Ajans")), b = rect(card("Sofra Pide")); const all = $$("[data-brand-card]").map(rect); return { a, b, widths: [...new Set(all.map((r) => Math.round(r.w)))] };`);
+  check("2 ve 25 görevli kart aynı genişlikte; 25 görevli kart daha uzun (esnek yükseklik)", Math.round(dims.a.w) === Math.round(dims.b.w) && dims.b.h > dims.a.h, `${Math.round(dims.a.w)}×${Math.round(dims.a.h)} / ${Math.round(dims.b.w)}×${Math.round(dims.b.h)}`);
+  check("Tüm kartlar aynı genişlikte", dims.widths.length === 1, `genişlik ${dims.widths}`);
   const scroll = await page(`
     const c = card("Sofra Pide"), list = c.querySelector("[data-card-tasks]");
     const h0 = rect(c.querySelector("[data-card-header]")).y, f0 = rect(c.querySelector("[data-card-footer]")).y, ch0 = rect(c).h;
@@ -158,8 +157,8 @@ try {
       footerSame: Math.abs(rect(c.querySelector("[data-card-footer]")).y - f0) < 1, heightSame: Math.abs(rect(c).h - ch0) < 1,
       footerInside: rect(c.querySelector("[data-card-footer]")).y + rect(c.querySelector("[data-card-footer]")).h <= rect(c).y + rect(c).h + 1 };
     list.scrollTop = 0; return res;`);
-  check("25 görevli kart kendi içinde kayar, büyümez", scroll.scrollable && scroll.scrolled && scroll.heightSame, JSON.stringify(scroll));
-  check("Başlık ve alt bilgi kaydırırken sabit kalır", scroll.headerSame && scroll.footerSame && scroll.footerInside);
+  check("Açık 25 görevli kartta görevlerin tamamı görünür (iç kaydırma yok)", !scroll.scrollable && scroll.heightSame, JSON.stringify(scroll));
+  check("Başlık ve alt bilgi kartın içinde kalır", scroll.headerSame && scroll.footerSame && scroll.footerInside);
 
   /* ── 2. Ek göstergeleri ── */
   const att = await page(`
@@ -187,15 +186,17 @@ try {
   await mouseTo(5, 5);
   await waitFor(() => page(`return !$("[data-cw-popover][aria-label='Görev ekleri']");`), 4000).catch(() => {});
 
-  // Kaydırma sırasında: tetikleyici liste dışına çıkınca katman gizlenir
+  // Kaydırma sırasında: tetikleyici kaydırılan alanın dışına çıkınca katman gizlenir (kart içi kaydırma yok; sayfa kayar)
   const clip = await page(`
-    const c = card("Sofra Pide"), list = c.querySelector("[data-card-tasks]");
-    list.scrollTop = 0; await new Promise((r) => setTimeout(r, 50));
-    const b = c.querySelector("button[aria-label*='ek dosya']"); b.click(); await new Promise((r) => setTimeout(r, 200));
+    const c = card("Sofra Pide");
+    const b = c.querySelector("button[aria-label*='ek dosya']"); b.scrollIntoView({ block: "center" }); await new Promise((r) => setTimeout(r, 100));
+    let list = b.parentElement; while (list && !(list.scrollHeight > list.clientHeight + 10 && /auto|scroll/.test(getComputedStyle(list).overflowY))) list = list.parentElement;
+    const top0 = list.scrollTop;
+    b.click(); await new Promise((r) => setTimeout(r, 200));
     const p = $("[data-cw-popover][aria-label='Görev ekleri']"); const visibleBefore = p && getComputedStyle(p).visibility === "visible";
-    list.scrollTop = list.scrollHeight; list.dispatchEvent(new Event("scroll")); await new Promise((r) => setTimeout(r, 200));
+    list.scrollTop = top0 + list.clientHeight + rect(b).h + 50; list.dispatchEvent(new Event("scroll")); await new Promise((r) => setTimeout(r, 200));
     const p2 = $("[data-cw-popover][aria-label='Görev ekleri']"); const hiddenAfter = !p2 || getComputedStyle(p2).visibility === "hidden";
-    list.scrollTop = 0; await new Promise((r) => setTimeout(r, 100));
+    list.scrollTop = top0; await new Promise((r) => setTimeout(r, 100));
     const p3 = $("[data-cw-popover][aria-label='Görev ekleri']"); const back = p3 && getComputedStyle(p3).visibility === "visible";
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     return { visibleBefore, hiddenAfter, back };`);
@@ -244,7 +245,7 @@ try {
       const shot = await send("Page.captureScreenshot", { format: "png" });
       writeFileSync(join(process.env.SCREENSHOT_DIR, `cw-${w}.png`), Buffer.from(shot.data, "base64"));
     }
-    check(`${w}px: ${cols} sütun, yatay taşma yok`, g.cols === cols && g.overflow <= 0 && g.rowOverflow === 0 && g.heights === 1, JSON.stringify(g));
+    check(`${w}px: ${cols} sütun, yatay taşma yok`, g.cols === cols && g.overflow <= 0 && g.rowOverflow === 0, JSON.stringify(g));
   }
 
   /* ── 6. Mobilde dokunarak önizleme ── */

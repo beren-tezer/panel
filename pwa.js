@@ -22,7 +22,7 @@ const DEFAULTS = {
   shortName: "Atlas Ajans",
   startUrl: "./",
   scope: "./",
-  themeColor: "#f97316",
+  themeColor: "#00ADA7", // üst bant renk geçişinin ilk rengi (tarayıcı / uygulama penceresi başlığı)
   backgroundColor: "#f8fafc",
 };
 

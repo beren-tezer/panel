@@ -217,16 +217,23 @@ const PRIORITY_META = {
   "Düşük": { cls: "text-slate-400", dot: "bg-slate-300", rank: 2 },
 };
 const PLATFORMS = ["Instagram", "TikTok", "Facebook", "LinkedIn", "YouTube", "Web Sitesi", "Meta Reklam", "Google Reklam"];
-/* Yeni Görev formu: görev türü seçenekleri ve yalnızca "Sosyal Medya" görevinde seçilen platformlar (diğer türlerde platform boş
-   kaydedilir; veritabanında 011_task_types.sql gerekir). Eski türler / platformlar mevcut görevlerde ve görev detayında durur. */
-const NEW_TASK_TYPES = ["Sosyal Medya", "Reklam İşleri", "Dijital Pazarlama"];
+/* Görev Türü seçenekleri (Yeni Görev formu + görev detayı) ve yalnızca "Sosyal Medya" görevinde seçilen platformlar (diğer türlerde
+   platform boş kaydedilir). value = tasks.format'ta saklanan değer: veritabanı kuralı (011_task_types.sql) değişmeden yalnızca izinli
+   değerler yazılır; "Web & Teknik" → "Web", "Ajans İşleri" → "Rapor". Eski türler mevcut görevlerde kendi adıyla durur. */
+const NEW_TASK_TYPES = [
+  { value: "Sosyal Medya", label: "Sosyal Medya" },
+  { value: "Web", label: "Web & Teknik" },
+  { value: "Dijital Pazarlama", label: "Dijital Pazarlama" },
+  { value: "Rapor", label: "Ajans İşleri" },
+];
+const FORMAT_LABELS = Object.fromEntries(NEW_TASK_TYPES.map((t) => [t.value, t.label]));
+const formatLabel = (format) => FORMAT_LABELS[format] || format || "";
 const SOCIAL_TASK_TYPE = "Sosyal Medya";
 const SOCIAL_PLATFORMS = ["Instagram", "TikTok", "Facebook", "LinkedIn", "YouTube"];
 const PLATFORM_DOT = {
   Instagram: "bg-pink-500", TikTok: "bg-slate-900", Facebook: "bg-blue-600", LinkedIn: "bg-sky-700",
   YouTube: "bg-red-600", "Web Sitesi": "bg-emerald-600", "Meta Reklam": "bg-indigo-500", "Google Reklam": "bg-amber-500",
 };
-const FORMATS = ["Reels", "Gönderi", "Hikâye", "Karusel", "Video", "Web", "Reklam", "Rapor"];
 
 const BRAND_COLORS = {
   orange: { tile: "bg-orange-100 text-orange-700", bar: "bg-orange-500", hex: ["#fb923c", "#c2410c"] },
@@ -904,7 +911,7 @@ function matchTask(t, f, brandsById) {
   if (!matchDate(t, f)) return false;
   const q = norm(f.search);
   if (q) {
-    const hay = norm([t.title, t.code, brandsById[t.brandId]?.name, USER_BY_ID[t.assigneeId]?.name, USER_BY_ID[t.reporterId]?.name, t.platform, t.format, t.status].join(" "));
+    const hay = norm([t.title, t.code, brandsById[t.brandId]?.name, USER_BY_ID[t.assigneeId]?.name, USER_BY_ID[t.reporterId]?.name, t.platform, t.format, formatLabel(t.format), t.status].join(" "));
     if (!hay.includes(q)) return false;
   }
   return true;
@@ -1292,9 +1299,9 @@ function FormatMenu({ value, onChange }) {
   return (
     <SelectMenu
       value={value} onChange={onChange} title="Görev Türü" width={170} ariaLabel="Görev Türü seç"
-      options={FORMATS.map((f) => ({ value: f, label: f }))}
+      options={value && !FORMAT_LABELS[value] ? [...NEW_TASK_TYPES, { value, label: value }] : NEW_TASK_TYPES}
       triggerClassName="px-1 py-0.5 -mx-1 hover:bg-slate-100"
-      renderTrigger={(v) => <span className="inline-flex items-center h-5 px-1.5 rounded-md bg-slate-100 text-slate-600 cw-10 font-semibold uppercase tracking-wide">{v}</span>}
+      renderTrigger={(v) => <span className="inline-flex items-center h-5 px-1.5 rounded-md bg-slate-100 text-slate-600 cw-10 font-semibold uppercase tracking-wide">{formatLabel(v)}</span>}
     />
   );
 }
@@ -1869,7 +1876,7 @@ function TaskRow({ task }) {
         <button
           type="button"
           onClick={(e) => { e.stopPropagation(); openTask(task.id); }}
-          title={`${task.title} · ${task.platform} · ${task.format}`}
+          title={`${task.title} · ${task.platform} · ${formatLabel(task.format)}`}
           className={`flex-1 min-w-0 text-left cw-13 font-medium cw-clamp2 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300 ${done ? "text-slate-400 line-through decoration-slate-300" : "text-slate-800"}`}
         >
           {task.title}
@@ -2785,7 +2792,7 @@ function TaskDrawer({ task, focus, focusKey, onClose }) {
               <PropertyRow icon={Users} label="Görevi Yapan">{canAssign ? <AssigneeMenu value={task.assigneeId} onChange={(v) => updateTask(task.id, { assigneeId: v }, "Görevi yapan güncellendi.")} /> : <span className="inline-flex items-center gap-1.5"><Avatar userId={task.assigneeId} size={22} /><span className="cw-12 font-medium text-slate-700">{USER_BY_ID[task.assigneeId]?.name || "Atanmamış"}</span></span>}</PropertyRow>
               <PropertyRow icon={Layers} label="Marka">{canAssign ? <BrandMenu value={task.brandId} onChange={(v) => updateTask(task.id, { brandId: v }, "Marka güncellendi.")} /> : <span className="inline-flex items-center gap-1.5"><BrandLogo brand={brand} size={22} /><span className="cw-12 font-medium text-slate-700">{brand?.name}</span></span>}</PropertyRow>
               <PropertyRow icon={LayoutGrid} label="Platform">{canEdit ? <PlatformMenu value={task.platform} onChange={(v) => updateTask(task.id, { platform: v }, "Platform güncellendi.")} /> : <PlatformChip platform={task.platform} />}</PropertyRow>
-              <PropertyRow icon={Type} label="Görev Türü">{canEdit ? <FormatMenu value={task.format} onChange={(v) => updateTask(task.id, { format: v }, "Görev türü güncellendi.")} /> : <span className="cw-12 text-slate-700">{task.format}</span>}</PropertyRow>
+              <PropertyRow icon={Type} label="Görev Türü">{canEdit ? <FormatMenu value={task.format} onChange={(v) => updateTask(task.id, { format: v }, "Görev türü güncellendi.")} /> : <span className="cw-12 text-slate-700">{formatLabel(task.format)}</span>}</PropertyRow>
               <PropertyRow icon={Calendar} label="Başlama Tarihi"><div className="w-44">{canEdit ? <DateInput value={task.publishDate} onChange={(v) => updateTask(task.id, { publishDate: v }, "Başlama tarihi güncellendi.")} /> : readDate(task.publishDate)}</div></PropertyRow>
               <PropertyRow icon={Clock} label="Bitiş Tarihi">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
@@ -2932,7 +2939,7 @@ function NewTaskModal({ presetBrandId, defaultDate, onClose, onCreated }) {
           </select>
         </Field>
         <Field label="Görev Türü">
-          <select value={form.format} onChange={(e) => set("format", e.target.value)} aria-label="Görev Türü" className={inputCls()}>{NEW_TASK_TYPES.map((p) => <option key={p}>{p}</option>)}</select>
+          <select value={form.format} onChange={(e) => set("format", e.target.value)} aria-label="Görev Türü" className={inputCls()}>{NEW_TASK_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}</select>
         </Field>
         {isSocial && (
           <Field label="Platform">
@@ -4244,9 +4251,6 @@ function OpsBox({ box, tasks }) {
   );
 }
 
-/* Ekranda gösterilen kutular (Geciken & Acil İşler, Yönetici Onayı, Müşteri Onayı, Aktif Çalışmalar gizli). */
-const VISIBLE_OPS_BOXES = new Set(["done", "web", "agency", "ads"]);
-
 function OpsDesk({ tasks, open, onToggle }) {
   const { brandsById } = useWS();
   const now = useNow();
@@ -4294,7 +4298,7 @@ function OpsDesk({ tasks, open, onToggle }) {
             ))}
           </div>
           <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4" data-ops-boxes="">
-            {OPS_BOXES.filter((b) => VISIBLE_OPS_BOXES.has(b.key)).map((b) => <OpsBox key={b.key} box={b} tasks={groups[b.key]} />)}
+            {OPS_BOXES.map((b) => <OpsBox key={b.key} box={b} tasks={groups[b.key]} />)}
           </div>
         </div>
       )}
@@ -4318,7 +4322,7 @@ const PLAN_ROW_TONE = {
   "Tamamlandı": "border-l-emerald-500 bg-emerald-50/50", "Gecikti": "border-l-red-500 bg-red-50/60",
 };
 const planRowTone = (task) => (deadlineInfo(task).state === "overdue" ? PLAN_ROW_TONE["Gecikti"] : PLAN_ROW_TONE[task.status] || PLAN_ROW_TONE["Başlanmadı"]);
-const planTitle = (task) => (norm(task.title).startsWith(norm(task.format)) ? task.title : `${task.format.toLocaleUpperCase("tr-TR")} · ${task.title}`);
+const planTitle = (task) => task.title; // görev türü ön eki ("SOSYAL MEDYA · ") gösterilmez
 
 /* Üzerine gelince açılan küçük bilgi kartı (masaüstü); dokunmatikte / klavyede tıklayınca açılır. */
 function HoverInfo({ label, trigger, triggerClass = "", width = 280, children }) {
@@ -4400,7 +4404,7 @@ function PlanRow({ task }) {
       className={`cw-plan-row group border border-slate-200 border-l-4 rounded-lg cursor-pointer hover:shadow-sm transition ${planRowTone(task)}`}>
       <span role="cell" className={`cw-plan-date cw-12 font-medium tabular-nums ${late ? "text-red-600" : "text-slate-700"}`}>{fmtShort(iso)}</span>
       <span role="cell" className={`cw-plan-day cw-12 ${late ? "text-red-600" : "text-slate-500"}`}>{GUNLER[d.getDay()]}</span>
-      <button role="cell" type="button" onClick={(e) => { e.stopPropagation(); openTask(task.id); }} title={`${task.title} · ${task.platform} · ${task.format}`}
+      <button role="cell" type="button" onClick={(e) => { e.stopPropagation(); openTask(task.id); }} title={`${task.title} · ${task.platform} · ${formatLabel(task.format)}`}
         className={`cw-plan-title min-w-0 text-left cw-13 font-semibold truncate rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300 ${task.status === "Tamamlandı" ? "text-slate-500" : "text-slate-900"}`}>
         {planTitle(task)}
       </button>
@@ -5395,7 +5399,7 @@ function ContentCard({ task }) {
       <div className="p-3 flex-1 flex flex-col gap-2">
         <div className="flex items-center gap-1.5 flex-wrap">
           <PlatformChip platform={task.platform} />
-          <span className="inline-flex items-center h-5 px-1.5 rounded-md border border-slate-200 text-slate-500 cw-10 font-semibold uppercase tracking-wide">{task.format}</span>
+          <span className="inline-flex items-center h-5 px-1.5 rounded-md border border-slate-200 text-slate-500 cw-10 font-semibold uppercase tracking-wide">{formatLabel(task.format)}</span>
           {brand && <span className="ml-auto inline-flex items-center gap-1 cw-11 text-slate-500"><BrandLogo brand={brand} size={16} />{brand.name}</span>}
         </div>
         <p className="cw-13 font-semibold text-slate-900 cw-clamp2">{task.title}</p>
@@ -5538,7 +5542,7 @@ function ContentDetailModal({ taskId, onClose }) {
   if (revising) return <RevisionModal task={task} target={target} onClose={() => setRevising(false)} onSubmitted={onClose} />;
   const current = media[Math.min(sel, media.length - 1)];
   return (
-    <Modal title={task.title} subtitle={`${brand?.name || ""} · ${task.platform} · ${task.format}${shown ? ` · Sürüm ${shown.versionNo}` : ""}`} onClose={onClose} width={900}
+    <Modal title={task.title} subtitle={`${brand?.name || ""} · ${task.platform} · ${formatLabel(task.format)}${shown ? ` · Sürüm ${shown.versionNo}` : ""}`} onClose={onClose} width={900}
       footer={pending && (allowed("canApproveContent") || allowed("canRequestRevision")) ? (
         <>
           <span className="mr-auto self-center cw-12 text-slate-500">Bu içerik onayınızı bekliyor.</span>
@@ -5570,7 +5574,7 @@ function ContentDetailModal({ taskId, onClose }) {
         </div>
         <div className="md:col-span-2 space-y-4">
           <dl className="space-y-2">
-            {[["Durum", <ClientStatusBadge key="s" status={task.status} />], ["Platform", <PlatformChip key="p" platform={task.platform} />], ["İçerik Türü", task.format], ["Başlama Tarihi", fmtDateLong(task.publishDate)], ["Son Güncelleme", fmtDateTime(task.updatedAt || task.createdAt)]].map(([k, v]) => (
+            {[["Durum", <ClientStatusBadge key="s" status={task.status} />], ["Platform", <PlatformChip key="p" platform={task.platform} />], ["İçerik Türü", formatLabel(task.format)], ["Başlama Tarihi", fmtDateLong(task.publishDate)], ["Son Güncelleme", fmtDateTime(task.updatedAt || task.createdAt)]].map(([k, v]) => (
               <div key={k} className="flex items-center justify-between gap-3 cw-12"><dt className="text-slate-500">{k}</dt><dd className="text-slate-900 font-medium text-right">{v}</dd></div>
             ))}
           </dl>
@@ -5651,7 +5655,7 @@ function ClientHistoryPage({ search, brandId }) {
                 <BrandLogo brand={brandsById[t.brandId]} size={28} />
                 <div className="flex-1 min-w-[12rem]">
                   <button type="button" onClick={() => openContent(t.id)} className="text-left cw-13 font-semibold text-slate-900 hover:text-orange-700">{t.title}</button>
-                  <p className="cw-11 text-slate-500">{t.format} · Sürüm {v?.versionNo || "?"} · {fmtDateTime(r.closedAt)}</p>
+                  <p className="cw-11 text-slate-500">{formatLabel(t.format)} · Sürüm {v?.versionNo || "?"} · {fmtDateTime(r.closedAt)}</p>
                   {d?.note && <p className="cw-12 text-slate-600 mt-0.5 cw-clamp2">“{d.note}”</p>}
                 </div>
                 <span className={`inline-flex items-center h-6 px-2 rounded-md border cw-11 font-semibold ${r.status === "approved" ? "text-teal-700 bg-teal-50 border-teal-200" : "text-orange-700 bg-orange-50 border-orange-200"}`}>{REQUEST_STATUS[r.status]}</span>
@@ -7611,8 +7615,10 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
   }, 30);
   const scrollTop = () => { if (mainRef.current) mainRef.current.scrollTo({ top: 0, behavior: "smooth" }); };
 
+  // Sol menüden gezinince ekranı kaplayan Toplu Görev Ekle sayfası ve görev detayı kapanır (toplu taslak saklanır).
+  const closeOverlays = () => { setBulkOpen(false); setDrawer(null); };
   const onNav = (key) => {
-    setSidebarOpen(false);
+    setSidebarOpen(false); closeOverlays();
     if (!OPS_KEYS.has(key)) { setPage(key); scrollTop(); return; }
     setPage("ops");
     if (key === "overview") { setTab("feed"); setFilter("dateScope", "all"); setOverviewOpen(true); scrollTop(); }
@@ -7632,10 +7638,10 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
     : flash ? "filters" : tab === "table" ? "plan" : tab === "files" || tab === "kit" ? tab : filters.dateScope === "today" ? "today" : "overview";
   const activeNav = currentPage === "ops" ? opsNav : currentPage;
 
-  const selectBrand = (id) => { setSelectedBrandId(id); setFolderId(null); setSidebarOpen(false); };
+  const selectBrand = (id) => { setSelectedBrandId(id); setFolderId(null); setSidebarOpen(false); setBulkOpen(false); };
   // Logo: marka seçimi ve filtreler sıfırlanır, rolün ana görünümü tüm markalarla açılır (adres değişmez).
   const goHome = () => {
-    clearFilters(); setSelectedBrandId("all"); setFolderId(null); setSidebarOpen(false);
+    clearFilters(); setSelectedBrandId("all"); setFolderId(null); setSidebarOpen(false); closeOverlays();
     setPage(DEFAULT_PAGE[role]);
     if (role === "admin") { setTab("feed"); setOverviewOpen(true); }
     scrollTop();
@@ -7724,8 +7730,8 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
           onSelectBrand={selectBrand}
           onHome={goHome}
           onNewBrand={perms.has("canCreateBrand") ? () => setBrandModal(true) : null}
-          onMyTasks={role === "client" ? null : () => { setFilters({ ...emptyFilters(), assignee: actor.id }); setPage("ops"); setTab(role === "employee" ? "table" : "feed"); notify("Size atanan görevler listelendi.", "info"); }}
-          onResetFilters={() => { clearFilters(); setSelectedBrandId("all"); notify("Tüm filtreler sıfırlandı.", "info"); }}
+          onMyTasks={role === "client" ? null : () => { closeOverlays(); setFilters({ ...emptyFilters(), assignee: actor.id }); setPage("ops"); setTab(role === "employee" ? "table" : "feed"); notify("Size atanan görevler listelendi.", "info"); }}
+          onResetFilters={() => { closeOverlays(); clearFilters(); setSelectedBrandId("all"); notify("Tüm filtreler sıfırlandı.", "info"); }}
           onSignOut={onSignOut}
           onChangePassword={accountApi && actor.id === realUserId ? () => setPasswordOpen(true) : null}
           switcher={showSwitcher ? <RoleSwitcher actor={actor} realUserId={realUserId} onChange={onViewAs} previewOnly={!allowImpersonation} directory={{ users: state.users, memberships: state.memberships, tasks: state.tasks }} /> : null}

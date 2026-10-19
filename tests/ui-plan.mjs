@@ -7,7 +7,7 @@ const h = await startHarness({ port: 5192, debugPort: 9352 });
 const { page, viewport, check, consoleProblems, send } = h;
 const SHOTS = process.env.SHOTS;
 const shot = async (name) => { if (!SHOTS) return; const r = await send("Page.captureScreenshot", { format: "png" }); writeFileSync(`${SHOTS}/${name}.png`, Buffer.from(r.data, "base64")); };
-const ORDER = ["Tamamlanan & Yayına Hazır", "Web & Teknik", "Ajans İçi İşler", "Reklam İşleri"];
+const ORDER = ["Geciken & Acil İşler", "Yönetici Onayı", "Müşteri Onayı", "Aktif Çalışmalar", "Tamamlanan & Yayına Hazır", "Web & Teknik", "Ajans İçi İşler", "Reklam İşleri"];
 const nav = (label) => page(`const b = $$("aside button").find((x) => x.textContent.trim().startsWith(${JSON.stringify(label)})); b.click(); return true;`);
 const overflow = () => page(`return document.documentElement.scrollWidth - window.innerWidth;`);
 
@@ -15,16 +15,16 @@ try {
   /* ── 1. Operasyon masası ── */
   await viewport(1440, 900);
   await send("Page.navigate", { url: h.url });
-  await waitFor(() => page(`return $$("[data-ops-box]").length === 4;`), 45000);
+  await waitFor(() => page(`return $$("[data-ops-box]").length === 8;`), 45000);
   const desk = await page(`return {
     metrics: $$("[data-ops-metric]").map((m) => [m.dataset.opsMetric, m.querySelector("p").textContent, +m.querySelector("[data-ops-value]").dataset.opsValue]),
     boxes: $$("[data-ops-box]").map((b) => { const r = b.getBoundingClientRect(); return { key: b.dataset.opsBox, title: b.querySelector("h3").textContent, n: +b.querySelector("[data-ops-count]").dataset.opsCount, items: $$("[data-ops-task]", b).map((x) => x.dataset.opsTask), x: Math.round(r.x), y: Math.round(r.y) }; }),
   };`);
   check("4 sayaç: Bugünkü Teslimatlar, Geciken İşler, Yönetici Onayı, Müşteri Onayı", JSON.stringify(desk.metrics.map((m) => m[1])) === JSON.stringify(["Bugünkü Teslimatlar", "Geciken İşler", "Yönetici Onayı", "Müşteri Onayı"]), desk.metrics.map((m) => `${m[1]}=${m[2]}`).join(", "));
-  check("Yalnızca 4 kutu, istenen sırada (Geciken & Acil, Yönetici Onayı, Müşteri Onayı, Aktif Çalışmalar gizli)", JSON.stringify(desk.boxes.map((b) => b.title)) === JSON.stringify(ORDER), desk.boxes.map((b) => b.title).join(" | "));
+  check("8 kutu, istenen sırada", JSON.stringify(desk.boxes.map((b) => b.title)) === JSON.stringify(ORDER), desk.boxes.map((b) => b.title).join(" | "));
   const all = desk.boxes.flatMap((b) => b.items);
   check("Her görev yalnızca bir grupta; sayılar listeyle aynı", all.length > 0 && new Set(all).size === all.length && desk.boxes.every((b) => b.n === b.items.length), `${all.length} görev`);
-  check("1440px: 4 kutu tek satırda", new Set(desk.boxes.map((b) => b.y)).size === 1 && new Set(desk.boxes.map((b) => b.x)).size === 4);
+  check("1440px: 8 kutu 4 sütun × 2 satır", new Set(desk.boxes.map((b) => b.y)).size === 2 && new Set(desk.boxes.map((b) => b.x)).size === 4);
   await shot("desk-1440");
   const opened = await page(`$("[data-ops-box] [data-ops-task]").click(); await tick(400); return !!$("aside[aria-label='Görev detayı']");`);
   check("Gruptaki işe tıklayınca görev detayı açılır", opened);
@@ -54,7 +54,7 @@ try {
   await nav("Sosyal Medya Planı");
   await waitFor(() => page(`return !!$("[data-social-plan]");`));
   await page(`$("[data-home-link]").click(); return true;`);
-  await waitFor(() => page(`return $$("[data-ops-box]").length === 4;`), 4000).catch(() => {});
+  await waitFor(() => page(`return $$("[data-ops-box]").length === 8;`), 4000).catch(() => {});
   await sleep(300);
   const home = await page(`return { cards: $$("[data-brand-card]").length, pressed: $$("aside button[aria-pressed='true']").length, search: $("input[aria-label='Genel arama']").value, path: location.pathname, tag: $("[data-home-link]").tagName };`);
   check("Logo: marka filtresi + arama sıfırlanır, ana görünüm tüm markalarla açılır (adres aynı)",
@@ -104,6 +104,8 @@ try {
     const b = $$("[data-plan-row] button[aria-label^='Sorumlu:']")[0]; if (!b) return null; b.click(); await tick(250);
     const pop = $$("[data-cw-popover]").find((p) => p.textContent.includes("Sorumlu kişi")); const t = pop?.textContent; b.click(); return t;`);
   check("Sorumlu kişi kartı (ad + e-posta)", !!person && person.includes("@"), person);
+  const titles = await page(`return $$("[data-plan-row] .cw-plan-title").map((x) => x.textContent);`);
+  check("Plan satırında görev türü ön eki yok (yalnızca görev adı)", titles.length > 0 && titles.every((t) => !t.includes(" · ")), titles.slice(0, 4).join(" | "));
   const drawer = await page(`$("[data-plan-row] .cw-plan-title").click(); await tick(400); return !!$("aside[aria-label='Görev detayı']");`);
   check("Satıra tıklayınca görev detayı açılır", drawer);
   await page(`$("button[aria-label='Detayı kapat']")?.click(); return true;`);
@@ -127,6 +129,21 @@ try {
   await shot("plan-week-1440");
   const remembered = await page(`return localStorage.getItem("cw:plan-view");`);
   check("Seçilen görünüm hatırlanır", remembered === "week");
+
+  /* Üst bant (masaüstü), Yeni Görev formu Görev Türü seçenekleri, Toplu Görev Ekle açıkken sol menü */
+  await nav("Genel Bakış");
+  await waitFor(() => page(`return !!$("[data-ops-desk]");`), 4000).catch(() => {});
+  check("1440px: üst bant turkuaz renk geçişli", (await page(`return getComputedStyle($("[data-topbar-band]")).backgroundImage;`)).includes("gradient"));
+  await page(`$("button[aria-label='Yeni Görev']").click(); return true;`);
+  await waitFor(() => page(`return !!$("select[aria-label='Görev Türü']");`), 3000);
+  const types = await page(`const s = $("select[aria-label='Görev Türü']"); const r = [...s.options].map((o) => o.textContent + "=" + o.value); return r;`);
+  check("Görev Türü: yalnızca 4 seçenek (izinli veritabanı değerleriyle)", JSON.stringify(types) === JSON.stringify(["Sosyal Medya=Sosyal Medya", "Web & Teknik=Web", "Dijital Pazarlama=Dijital Pazarlama", "Ajans İşleri=Rapor"]), types.join(", "));
+  await page(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); exact("button", "İptal")?.click(); return true;`); await sleep(300);
+  await page(`$("button[aria-label='Toplu Görev Ekle']").click(); return true;`);
+  await waitFor(() => page(`return !!$("[data-bulk-sheet]");`), 3000);
+  await nav("Sosyal Medya Planı");
+  const navOk = await waitFor(() => page(`return !$("[data-bulk-sheet]") && !!$("[data-social-plan]");`), 3000).then(() => true, () => false);
+  check("Toplu Görev Ekle açıkken sol menü: sayfa kapanır, seçilen sayfa açılır", navOk);
 
   /* ── 4. Mobil ── */
   for (const v of ["month", "week"]) {

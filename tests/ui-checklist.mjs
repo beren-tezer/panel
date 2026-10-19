@@ -178,9 +178,9 @@ try {
   check("Web görevi varsayılan şablonu kullanır", (await counts())[1] === 12);
   await page(`$("button[aria-label='Görev Türü seç']", ${drawer}).click();`);
   await waitFor(() => page(`return !!$("[data-cw-popover]");`), 2000);
-  await page(`exact("[data-cw-popover] button", "Gönderi").click();`);
+  await page(`exact("[data-cw-popover] button", "Sosyal Medya").click();`);
   await waitFor(async () => (await counts())?.[1] === 7, 3000).catch(() => {});
-  check("Görev Türü Gönderi olunca güncel marka şablonu (sürüm 2) uygulanır", await page(`return $$("[data-check-item] p")[0]?.textContent === "Kurumsal renk paletine uyuldu." && ${section}.textContent.includes("s2");`),
+  check("Görev Türü Sosyal Medya olunca güncel marka şablonu (sürüm 2) uygulanır", await page(`return $$("[data-check-item] p")[0]?.textContent === "Kurumsal renk paletine uyuldu." && ${section}.textContent.includes("s2");`),
     await page(`return $$("[data-check-item] p").map((p) => p.textContent).slice(0, 2).join(" | ") + " " + $("[id^='cl-title-']").textContent;`));
 
   /* Admin: eksik kontrolle gönderim yalnızca gerekçeyle */

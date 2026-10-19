@@ -171,7 +171,7 @@ export function opsBox(task, { now = new Date(), timeZone = TIMEZONE, isAgency =
   if (task.status === "Müşteri Onayı") return "client";
   if (isUrgent(task, now, timeZone)) return "urgent";
   if (task.format === "Web" || task.platform === "Web Sitesi") return "web";
-  if (isAgency(task)) return "agency";
+  if (task.format === "Rapor" || isAgency(task)) return "agency"; // "Rapor" = arayüzde "Ajans İşleri"
   if (AD_FORMATS.has(task.format) || AD_PLATFORMS.has(task.platform)) return "ads";
   return "active";
 }

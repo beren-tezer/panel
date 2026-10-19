@@ -83,8 +83,8 @@ try {
   const formInfo = (await page(`const labels = $$("[role='dialog'][aria-label='Yeni Görev'] label").map((l) => l.firstElementChild?.textContent.trim());
     const sel = (n) => $$("[role='dialog'] label").find((l) => l.firstElementChild?.textContent.trim() === n)?.querySelector("select");
     return { order: labels.indexOf("Görev Türü") < labels.indexOf("Platform"), types: [...sel("Görev Türü").options].map((o) => o.value), platforms: [...sel("Platform").options].map((o) => o.value), value: sel("Görev Türü").value };`));
-  check("Görev Türü Platform'un üstünde; seçenekler: Sosyal Medya, Reklam İşleri, Dijital Pazarlama; platformlar yalnızca sosyal medya",
-    formInfo.order && formInfo.value === "Sosyal Medya" && JSON.stringify(formInfo.types) === JSON.stringify(["Sosyal Medya", "Reklam İşleri", "Dijital Pazarlama"])
+  check("Görev Türü Platform'un üstünde; seçenekler: Sosyal Medya, Web & Teknik (Web), Dijital Pazarlama, Ajans İşleri (Rapor); platformlar yalnızca sosyal medya",
+    formInfo.order && formInfo.value === "Sosyal Medya" && JSON.stringify(formInfo.types) === JSON.stringify(["Sosyal Medya", "Web", "Dijital Pazarlama", "Rapor"])
       && JSON.stringify(formInfo.platforms) === JSON.stringify(["Instagram", "TikTok", "Facebook", "LinkedIn", "YouTube"]), JSON.stringify(formInfo));
   // Görevi Yapan + Görevi Veren zorunlu; Görevi Veren listesinde yalnızca adminler
   const people = await page(`const sel = (n) => $$("[role='dialog'] label").find((l) => l.firstElementChild?.textContent.trim() === n)?.querySelector("select");
@@ -96,7 +96,7 @@ try {
   check("Görevi Yapan ve Görevi Veren boşsa görev oluşturulmaz (zorunlu)", await page(`const t = $("[role='dialog'][aria-label='Yeni Görev']")?.textContent || ""; return t.includes("Görevi yapacak kişiyi seçin.") && t.includes("Görevi veren / takip eden yöneticiyi seçin.");`));
   await page(`setValue(${field("Görevi Veren / Takipçi")}, "u1"); return true;`);
   const hasPlatform = () => page(`return $$("[role='dialog'] label").some((l) => l.firstElementChild?.textContent.trim() === "Platform");`);
-  await page(`setValue(${field("Görev Türü")}, "Reklam İşleri"); return true;`); await sleep(100);
+  await page(`setValue(${field("Görev Türü")}, "Web"); return true;`); await sleep(100);
   const hiddenAd = !(await hasPlatform());
   await page(`setValue(${field("Görev Türü")}, "Dijital Pazarlama"); return true;`); await sleep(100);
   const hiddenDigital = !(await hasPlatform());
@@ -107,15 +107,15 @@ try {
   await page(`exact("button", "Görevi Oluştur").click();`);
   await sleep(300);
   check("Admin görevi oluşturur", (await toasts()).includes("Görev oluşturuldu"), await toasts());
-  // Platformsuz "Reklam İşleri" görevi kaydedilir ve Reklam İşleri kutusunda görünür (kaybolmaz)
+  // Platformsuz "Ajans İşleri" görevi kaydedilir ve Ajans İçi İşler kutusunda görünür (kaybolmaz)
   await page(`$$("button").find((b) => b.textContent.trim() === "Yeni Görev" || b.getAttribute("aria-label") === "Yeni Görev").click();`);
   await waitFor(() => page(`return !!$("[role='dialog'][aria-label='Yeni Görev']");`), 2000);
-  await page(`setValue(${field("Görev Başlığı")}, "Reklam kampanyası testi"); setValue(${field("Marka")}, "b-tepe"); setValue(${field("Görevi Yapan")}, "u2"); setValue(${field("Görev Türü")}, "Reklam İşleri"); return true;`);
+  await page(`setValue(${field("Görev Başlığı")}, "Ajans işi testi"); setValue(${field("Marka")}, "b-tepe"); setValue(${field("Görevi Yapan")}, "u2"); setValue(${field("Görev Türü")}, "Rapor"); return true;`);
   await page(`exact("button", "Görevi Oluştur").click();`);
   await sleep(300);
   await page(`$("[data-home-link]").click(); return true;`); // tüm markalar
-  const adBox = await waitFor(() => page(`const b = $("[data-ops-box='ads']"); return b && b.textContent.includes("Reklam kampanyası testi") ? b.textContent.slice(0, 200) : null;`), 3000).catch(async () => page(`return "kutular: " + $$("[data-ops-box]").map((b) => b.dataset.opsBox + "=" + b.textContent.slice(0, 80)).join(" | ");`));
-  check("Platformsuz Reklam İşleri görevi kaydedilir ve Reklam İşleri kutusunda görünür", !!adBox && adBox.includes("Reklam kampanyası testi") && !adBox.startsWith("kutular"), adBox);
+  const adBox = await waitFor(() => page(`const b = $("[data-ops-box='agency']"); return b && b.textContent.includes("Ajans işi testi") ? b.textContent.slice(0, 200) : null;`), 3000).catch(async () => page(`return "kutular: " + $$("[data-ops-box]").map((b) => b.dataset.opsBox + "=" + b.textContent.slice(0, 80)).join(" | ");`));
+  check("Platformsuz Ajans İşleri görevi kaydedilir ve Ajans İçi İşler kutusunda görünür", !!adBox && adBox.includes("Ajans işi testi") && !adBox.startsWith("kutular"), adBox);
 
   /* 3–4. Çalışan: sürüm oluşturur, dosya yükler, metni yazar, yönetici onayına gönderir */
   await role("employee", "u2");

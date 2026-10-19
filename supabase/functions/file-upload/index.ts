@@ -1,7 +1,12 @@
 // Supabase Edge Function: file-upload
 // Görev detayı "Ekler" ve "Marka Dosyaları" ekranındaki "Dosya Yükle" bu fonksiyonu çağırır. Dosya Google Drive'a
-// (hizmet hesabı / Service Account ile) markanın klasörüne yüklenir, "bağlantıya sahip olan herkes görüntüleyebilir"
-// olarak paylaşılır ve bağlantısı (webContentLink) attachments / assets tablosuna kaydedilir.
+// markanın klasörüne yüklenir, "bağlantıya sahip olan herkes görüntüleyebilir" olarak paylaşılır ve bağlantısı
+// (webContentLink) attachments / assets tablosuna kaydedilir.
+//
+// Google erişimi iki yoldan biriyle:
+//   OAuth (varsayılan, Ortak Drive gerekmez): şirket hesabının yenileme anahtarı, kapsam drive.file — fonksiyon yalnızca
+//     kendi oluşturduğu dosya / klasörleri görür; dosyalar o hesabın Drive kotasını kullanır.
+//   Hizmet hesabı (Service Account): yalnızca Ortak Drive ile çalışır (hizmet hesabının depolama kotası yoktur).
 //
 //   POST ?kind=task&id=<görev id>&name=<dosya adı>&internal=0|1     gövde: dosyanın kendisi   → attachments satırı
 //   POST ?kind=brand&id=<marka id>&name=<dosya adı>&folder=<klasör>  gövde: dosyanın kendisi   → assets satırı
@@ -10,14 +15,15 @@
 // Yetki: kayıt çağıranın oturumuyla eklenir; tablo kuralları (RLS) aynen uygulanır. Yükleme öncesi aynı koşullar ayrıca
 // denetlenir (yetkisiz kişi Drive'a dosya bırakamasın). Kayıt eklenemezse yüklenen dosya geri silinir.
 //
-// Klasör: markada geçerli bir Ortak Drive klasörü (brands.drive_folder_id) varsa o; yoksa DRIVE_ROOT_FOLDER_ID altında
-// marka adıyla klasör açılır ve markaya kaydedilir. Alt klasörler: "Görev Ekleri" ve marka dosyası klasör adları.
-// Hizmet hesabının kendi depolama kotası yoktur: kök klasör bir Ortak Drive'da (Shared Drive) olmalıdır.
+// Klasör: markada fonksiyonun erişebildiği bir klasör (brands.drive_folder_id) varsa o; yoksa kök klasör altında marka
+// adıyla klasör açılır ve markaya kaydedilir. Kök: DRIVE_ROOT_FOLDER_ID erişilebilirse o, değilse Drive'ım altında
+// "AgencyOS Panel Dosyaları" (fonksiyon açar). Alt klasörler: "Görev Ekleri" ve marka dosyası klasör adları.
 //
 // Gizli değerler (Dashboard → Edge Functions → Secrets):
-//   GCP_SERVICE_ACCOUNT_KEY     : Google Cloud'dan indirilen JSON anahtar dosyasının TAMAMI (veya base64 hâli;
-//                                 eski ad GOOGLE_SERVICE_ACCOUNT_JSON da okunur)
-//   DRIVE_ROOT_FOLDER_ID        : Ortak Drive'daki ana klasörün kimliği (adres çubuğunda …/folders/<kimlik>)
+//   OAuth:        GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_OAUTH_REFRESH_TOKEN
+//   Hizmet hesabı: GCP_SERVICE_ACCOUNT_KEY (JSON anahtarın tamamı veya base64 hâli; eski ad GOOGLE_SERVICE_ACCOUNT_JSON)
+//                  + DRIVE_ROOT_FOLDER_ID (Ortak Drive'daki ana klasör)
+//   OAuth değerleri varsa hizmet hesabı kullanılmaz.
 // Yayınlama:  supabase functions deploy file-upload   (veya Dashboard → Edge Functions → Deploy a new function → file-upload)
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 
@@ -56,7 +62,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const formatBytes = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1).replace(".", ",")} MB`);
 const cleanName = (name: string) => name.replace(/[\u0000-\u001f\\/]+/g, " ").trim().slice(0, 200) || "dosya";
 
-/* ───────────────────────── Google: hizmet hesabı erişim anahtarı ───────────────────────── */
+/* ───────────────────────── Google: erişim anahtarı (OAuth veya hizmet hesabı) ───────────────────────── */
 
 type ServiceAccount = { client_email: string; private_key: string; token_uri?: string };
 let cachedToken: { value: string; until: number } | null = null;
@@ -78,8 +84,28 @@ function serviceAccount(): ServiceAccount {
   return sa;
 }
 
+const oauth = () => {
+  const [client_id, client_secret, refresh_token] = ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_REFRESH_TOKEN"].map((k) => (Deno.env.get(k) || "").trim());
+  return client_id && client_secret && refresh_token ? { client_id, client_secret, refresh_token } : null;
+};
+const keep = (body: { access_token?: string; expires_in?: number }) => {
+  cachedToken = { value: body.access_token!, until: Date.now() + (Number(body.expires_in || 3600) - 300) * 1000 };
+  return cachedToken.value;
+};
+
 async function googleToken(): Promise<string> {
   if (cachedToken && cachedToken.until > Date.now()) return cachedToken.value;
+  const user = oauth();
+  if (user) {
+    const res = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "refresh_token", ...user }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.access_token) throw new Error(`google_auth: ${body.error_description || body.error || res.status}`);
+    return keep(body);
+  }
   const sa = serviceAccount();
   const tokenUri = sa.token_uri || "https://oauth2.googleapis.com/token";
   const now = Math.floor(Date.now() / 1000);
@@ -97,8 +123,7 @@ async function googleToken(): Promise<string> {
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok || !body.access_token) throw new Error(`google_auth: ${body.error_description || body.error || res.status}`);
-  cachedToken = { value: body.access_token, until: Date.now() + (Number(body.expires_in || 3600) - 300) * 1000 };
-  return cachedToken.value;
+  return keep(body);
 }
 
 const API = "https://www.googleapis.com/drive/v3";
@@ -137,19 +162,35 @@ function findOrCreateFolder(parent: string, name: string): Promise<string> {
   return folderPromises.get(key)!;
 }
 
-/* Markanın klasörü: kayıtlı klasör Ortak Drive'da ve erişilebilirse o; değilse kök altında marka adıyla açılır. */
+/* Klasör kullanılabilir mi: erişilebilir, çöpte değil; hizmet hesabıyla ayrıca Ortak Drive'da (kota) olmalı. */
+async function usableFolder(id: string): Promise<boolean> {
+  try {
+    const f = await drive(`/files/${encodeURIComponent(id)}`, {}, { fields: "id, mimeType, driveId, trashed" });
+    return f.mimeType === FOLDER_MIME && !f.trashed && (!!f.driveId || !!oauth());
+  } catch { return false; } // erişim yok (drive.file kapsamı dışında / paylaşılmamış)
+}
+
+const ROOT_NAME = "AgencyOS Panel Dosyaları";
+let rootPromise: Promise<string> | null = null;
+function rootFolder(): Promise<string> {
+  if (!rootPromise) {
+    rootPromise = (async () => {
+      const configured = (Deno.env.get("DRIVE_ROOT_FOLDER_ID") || "").trim();
+      if (configured && (await usableFolder(configured))) return configured;
+      if (!oauth()) throw new Error("not_configured"); // hizmet hesabı Drive'ım'a dosya yazamaz
+      return findOrCreateFolder("root", ROOT_NAME);
+    })();
+    rootPromise.catch(() => { rootPromise = null; });
+  }
+  return rootPromise;
+}
+
+/* Markanın klasörü: kayıtlı klasör kullanılabilirse o; değilse kök altında marka adıyla açılır. */
 async function brandFolder(admin: SupabaseClient, brandId: string): Promise<string> {
   const { data: brand, error } = await admin.from("brands").select("id, name, drive_folder_id").eq("id", brandId).single();
   if (error || !brand) throw new Error("brand_not_found");
-  if (brand.drive_folder_id) {
-    try {
-      const f = await drive(`/files/${encodeURIComponent(brand.drive_folder_id)}`, {}, { fields: "id, mimeType, driveId, trashed" });
-      if (f.mimeType === FOLDER_MIME && f.driveId && !f.trashed) return f.id;
-    } catch { /* hizmet hesabıyla paylaşılmamış veya Ortak Drive'da değil → kök altındaki klasör kullanılır */ }
-  }
-  const root = Deno.env.get("DRIVE_ROOT_FOLDER_ID");
-  if (!root) throw new Error("not_configured");
-  const id = await findOrCreateFolder(root, cleanName(brand.name));
+  if (brand.drive_folder_id && (await usableFolder(brand.drive_folder_id))) return brand.drive_folder_id;
+  const id = await findOrCreateFolder(await rootFolder(), cleanName(brand.name));
   if (!brand.drive_folder_id) await admin.from("brands").update({ drive_folder_id: id }).eq("id", brandId);
   return id;
 }

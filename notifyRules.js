@@ -1,7 +1,7 @@
 /*
  * AgencyOS — Bildirim kuralları (kime gider?)
  *
- *   Görev oluşturulduğunda / başka kişiye atandığında   → yalnızca Görevi Yapan (assignee)
+ *   Görev oluşturulduğunda / kişi eklendiğinde         → görevi yapan kişiler (çoklu; yalnızca yeni eklenenler)
  *   Durum "Çalışılıyor", "Revizyon", "Yönetici Onayı",
  *         "Tamamlandı", "Onaylandı" olduğunda             → yalnızca Görevi Veren / Takipçi (reporter, admin)
  *   Durum "Müşteri Onayı" olduğunda                      → Takipçi + görevin markasına tanımlı müşteri(ler)
@@ -10,6 +10,8 @@
  * Takipçisi olmayan (eski) görevlerde takipçi yerine tüm aktif adminler bilgilendirilir.
  * İşlemi yapan kişi kendine bildirim almaz (makeNotifications içinde elenir).
  */
+
+import { assigneesOf } from "./taskPeople.js";
 
 export const FOLLOWER_STATUSES = new Set(["Çalışılıyor", "Revizyon", "Yönetici Onayı", "Tamamlandı", "Onaylandı", "Müşteri Onayı"]);
 export const CLIENT_STATUSES = new Set(["Müşteri Onayı"]);
@@ -23,5 +25,8 @@ export function statusRecipients(task, status, { adminIds = [], clientIds = [] }
   return { team: followerIds(task, adminIds), clients: CLIENT_STATUSES.has(status) ? [...clientIds] : [] };
 }
 
-/* Atama (yeni görev veya Görevi Yapan değişti): yalnızca Görevi Yapan. */
-export const assignRecipients = (task) => (task.assigneeId ? [task.assigneeId] : []);
+/* Atama: yeni görevde görevi yapan tüm kişiler; güncellemede yalnızca yeni eklenen kişiler (prev verilirse). */
+export const assignRecipients = (task, prev = null) => {
+  const before = new Set(prev ? assigneesOf(prev) : []);
+  return assigneesOf(task).filter((id) => !before.has(id));
+};

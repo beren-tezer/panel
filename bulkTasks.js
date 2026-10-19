@@ -220,7 +220,8 @@ export function validateSheet(rows, ctx) {
 export function toTask(row, now = new Date().toISOString()) {
   return {
     id: row.taskId, code: null, brandId: row.brandId, title: row.title.trim(), platform: row.platform, format: row.format,
-    assigneeId: row.assigneeId || "", status: "Başlanmadı", priority: "Orta", publishDate: row.dueDate, dueDate: row.dueDate, dueTime: "", // saat seçimi yok: gün sonu
+    assigneeId: row.assigneeId || "", assigneeIds: row.assigneeId ? [row.assigneeId] : [], platforms: row.platform ? [row.platform] : [], // tabloda tek kişi / platform
+    status: "Başlanmadı", priority: "Orta", publishDate: row.dueDate, dueDate: row.dueDate, dueTime: "", // saat seçimi yok: gün sonu
     description: "", createdAt: now, updatedAt: now,
   };
 }

@@ -16,6 +16,7 @@ const role = async (r, userId) => {
   await sleep(250);
   if (userId) { await page(`setValue($("select[aria-label='Görüntülenen kullanıcı']"), ${JSON.stringify(userId)});`); await sleep(300); }
 };
+const chip = (group, value) => `$("[data-chip-checks='${group}'] [data-value='${value}']").click();`;
 const field = (label) => `$$("[role='dialog'] label").find((l) => l.firstElementChild && l.firstElementChild.textContent.trim() === ${JSON.stringify(label)}).querySelector("input, select, textarea")`;
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 const uploadPng = (name) => page(`const bin = atob(${JSON.stringify(PNG)}); const bytes = new Uint8Array([...bin].map((c) => c.charCodeAt(0)));
@@ -82,20 +83,22 @@ try {
   // Yeni Görev formu: Görev Türü Platform'un üstünde; 3 seçenek; Platform yalnızca Sosyal Medya'da, yalnızca sosyal platformlar
   const formInfo = (await page(`const labels = $$("[role='dialog'][aria-label='Yeni Görev'] label").map((l) => l.firstElementChild?.textContent.trim());
     const sel = (n) => $$("[role='dialog'] label").find((l) => l.firstElementChild?.textContent.trim() === n)?.querySelector("select");
-    return { order: labels.indexOf("Görev Türü") < labels.indexOf("Platform"), types: [...sel("Görev Türü").options].map((o) => o.value), platforms: [...sel("Platform").options].map((o) => o.value), value: sel("Görev Türü").value };`));
+    const plat = $("[data-chip-checks='platforms']");
+    return { order: !!plat && !!(sel("Görev Türü").compareDocumentPosition(plat) & Node.DOCUMENT_POSITION_FOLLOWING), types: [...sel("Görev Türü").options].map((o) => o.value),
+      platforms: $$("[data-value]", plat).map((o) => o.dataset.value), checked: $$("[aria-checked='true']", plat).map((o) => o.dataset.value), value: sel("Görev Türü").value };`));
   check("Görev Türü Platform'un üstünde; seçenekler: Sosyal Medya, Web & Teknik (Web), Dijital Pazarlama, Ajans İşleri (Rapor); platformlar yalnızca sosyal medya",
     formInfo.order && formInfo.value === "Sosyal Medya" && JSON.stringify(formInfo.types) === JSON.stringify(["Sosyal Medya", "Web", "Dijital Pazarlama", "Rapor"])
-      && JSON.stringify(formInfo.platforms) === JSON.stringify(["Instagram", "TikTok", "Facebook", "LinkedIn", "YouTube"]), JSON.stringify(formInfo));
+      && JSON.stringify(formInfo.platforms) === JSON.stringify(["Instagram", "TikTok", "Facebook", "LinkedIn", "YouTube"]) && JSON.stringify(formInfo.checked) === JSON.stringify(["Instagram"]), JSON.stringify(formInfo));
   // Görevi Yapan + Görevi Veren zorunlu; Görevi Veren listesinde yalnızca adminler
   const people = await page(`const sel = (n) => $$("[role='dialog'] label").find((l) => l.firstElementChild?.textContent.trim() === n)?.querySelector("select");
-    return { yapan: [...sel("Görevi Yapan").options].map((o) => o.value), veren: [...sel("Görevi Veren / Takipçi").options].map((o) => o.value), varsayilan: sel("Görevi Veren / Takipçi").value };`);
+    return { yapan: $$("[data-chip-checks='assignees'] [data-value]").map((o) => o.dataset.value), veren: [...sel("Görevi Veren / Takipçi").options].map((o) => o.value), varsayilan: sel("Görevi Veren / Takipçi").value };`);
   check("Görevi Veren listesinde yalnızca adminler (çalışan/müşteri yok); varsayılan: oturumdaki admin",
     people.veren.includes("u1") && !people.veren.includes("u2") && !people.veren.some((v) => /^c/.test(v)) && people.varsayilan === "u1" && people.yapan.includes("u2"), JSON.stringify(people));
   await page(`setValue(${field("Görev Başlığı")}, "Zorunlu alan testi"); setValue(${field("Görevi Veren / Takipçi")}, ""); exact("button", "Görevi Oluştur").click(); return true;`);
   await sleep(200);
-  check("Görevi Yapan ve Görevi Veren boşsa görev oluşturulmaz (zorunlu)", await page(`const t = $("[role='dialog'][aria-label='Yeni Görev']")?.textContent || ""; return t.includes("Görevi yapacak kişiyi seçin.") && t.includes("Görevi veren / takip eden yöneticiyi seçin.");`));
+  check("Görevi Yapan ve Görevi Veren boşsa görev oluşturulmaz (zorunlu)", await page(`const t = $("[role='dialog'][aria-label='Yeni Görev']")?.textContent || ""; return t.includes("Görevi yapacak en az bir kişi seçin.") && t.includes("Görevi veren / takip eden yöneticiyi seçin.");`));
   await page(`setValue(${field("Görevi Veren / Takipçi")}, "u1"); return true;`);
-  const hasPlatform = () => page(`return $$("[role='dialog'] label").some((l) => l.firstElementChild?.textContent.trim() === "Platform");`);
+  const hasPlatform = () => page(`return !!$("[data-chip-checks='platforms']");`);
   await page(`setValue(${field("Görev Türü")}, "Web"); return true;`); await sleep(100);
   const hiddenAd = !(await hasPlatform());
   await page(`setValue(${field("Görev Türü")}, "Dijital Pazarlama"); return true;`); await sleep(100);
@@ -103,14 +106,16 @@ try {
   await page(`setValue(${field("Görev Türü")}, "Sosyal Medya"); return true;`); await sleep(100);
   check("Platform alanı yalnızca Sosyal Medya seçiliyken görünür", hiddenAd && hiddenDigital && (await hasPlatform()), JSON.stringify({ hiddenAd, hiddenDigital }));
   await page(`setValue(${field("Görev Başlığı")}, ${JSON.stringify(TITLE)});
-    setValue(${field("Marka")}, "b-tepe"); setValue(${field("Görevi Yapan")}, "u2"); setValue(${field("Görev Türü")}, "Sosyal Medya"); setValue(${field("Platform")}, "TikTok"); return true;`);
+    setValue(${field("Marka")}, "b-tepe"); ${chip("assignees", "u2")} setValue(${field("Görev Türü")}, "Sosyal Medya"); return true;`);
+  await sleep(100);
+  await page(`${chip("platforms", "Instagram")} ${chip("platforms", "TikTok")} return true;`); // yalnızca TikTok
   await page(`exact("button", "Görevi Oluştur").click();`);
   await sleep(300);
   check("Admin görevi oluşturur", (await toasts()).includes("Görev oluşturuldu"), await toasts());
   // Platformsuz "Ajans İşleri" görevi kaydedilir ve Ajans İçi İşler kutusunda görünür (kaybolmaz)
   await page(`$$("button").find((b) => b.textContent.trim() === "Yeni Görev" || b.getAttribute("aria-label") === "Yeni Görev").click();`);
   await waitFor(() => page(`return !!$("[role='dialog'][aria-label='Yeni Görev']");`), 2000);
-  await page(`setValue(${field("Görev Başlığı")}, "Ajans işi testi"); setValue(${field("Marka")}, "b-tepe"); setValue(${field("Görevi Yapan")}, "u2"); setValue(${field("Görev Türü")}, "Rapor"); return true;`);
+  await page(`setValue(${field("Görev Başlığı")}, "Ajans işi testi"); setValue(${field("Marka")}, "b-tepe"); ${chip("assignees", "u2")} setValue(${field("Görev Türü")}, "Rapor"); return true;`);
   await page(`exact("button", "Görevi Oluştur").click();`);
   await sleep(300);
   await page(`$("[data-home-link]").click(); return true;`); // tüm markalar

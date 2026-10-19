@@ -210,8 +210,8 @@ try {
   const stored = await page(`return Object.keys(localStorage).filter((k) => k.startsWith("cw:bulk-draft:v1:demo:u1"));`);
   check("Taslak kullanıcı + çalışma alanı anahtarıyla otomatik saklanır", stored.length === 1 && (await page(`return $("[data-bulk-sheet]").textContent.includes("Taslak kaydedildi");`)), stored.join());
   await send("Page.reload");
-  await waitFor(() => page(`return $$("[data-brand-card]").length > 0;`));
-  await openSheet();
+  // Sayfa yenilenince Toplu Görev Ekle açık kalır (?toplu=1); taslak geri yükleme sorusu yine gelir.
+  check("Sayfa yenilenince Toplu Görev Ekle açık kalır", await waitFor(() => page(`return !!$("[data-bulk-sheet]") && new URLSearchParams(location.search).get("toplu") === "1";`), 45000).then(() => true, () => false));
   check("Yeniden açılınca geri yükleme seçeneği sunulur", await waitFor(() => page(`return !!$("[role='alertdialog'][aria-label='Kaydedilmemiş taslak']") && $("[role='alertdialog']").textContent.includes("2 satır");`), 3000).catch(() => false));
   await page(`exact("button", "Taslağı Geri Yükle").click();`);
   check("Taslak geri yüklenir", (await cell(0, 1)) === "Taslak görevi A" && (await cell(1, 1)) === "Taslak görevi B");

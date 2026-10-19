@@ -22,7 +22,8 @@
     "icons": "python scripts/make-icons.py",
     "test:ui:agreement": "node --experimental-websocket tests/ui-agreement.mjs",
     "test:ui:pwa": "node --experimental-websocket tests/ui-pwa.mjs",
-    "test:ui:invite": "node --experimental-websocket tests/ui-invite.mjs"
+    "test:ui:invite": "node --experimental-websocket tests/ui-invite.mjs",
+    "test:ui:multi": "node --experimental-websocket tests/ui-multi.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",

@@ -7,6 +7,8 @@
  *   revisionInfo(task, approvals) → null | { state, label, approval }  state: requested | in_progress | resolved
  */
 
+import { platformsOf } from "./taskPeople.js";
+
 /* Ajansın çalıştığı saat dilimi. Tarayıcının saat dilimi farklı olsa bile teslim durumları buna göre hesaplanır. */
 export const TIMEZONE = "Europe/Istanbul";
 
@@ -131,6 +133,7 @@ export const EMPLOYEE_BOXES = [
 const SOCIAL_FORMATS = new Set(["Reels", "Gönderi", "Hikâye", "Karusel", "Video", "Sosyal Medya"]);
 const AD_FORMATS = new Set(["Reklam", "Reklam İşleri"]);
 const AD_PLATFORMS = new Set(["Meta Reklam", "Google Reklam"]);
+const hasPlatform = (task, test) => platformsOf(task).some(test); // çoklu platform: herhangi biri
 
 /* Öncelik: teslim edilmiş → onay aşamaları → gecikme → iş türü (web / reklam / sosyal medya içeriği / diğer). */
 export function employeeBox(task, now = new Date(), timeZone = TIMEZONE) {
@@ -138,8 +141,8 @@ export function employeeBox(task, now = new Date(), timeZone = TIMEZONE) {
   if (task.status === "Yönetici Onayı") return "manager";
   if (task.status === "Müşteri Onayı") return "client";
   if (task.status === "Gecikti" || deadlineInfo(task, now, timeZone).state === "overdue") return "late";
-  if (task.format === "Web" || task.platform === "Web Sitesi") return "web";
-  if (AD_FORMATS.has(task.format) || AD_PLATFORMS.has(task.platform)) return "ads";
+  if (task.format === "Web" || hasPlatform(task, (p) => p === "Web Sitesi")) return "web";
+  if (AD_FORMATS.has(task.format) || hasPlatform(task, (p) => AD_PLATFORMS.has(p))) return "ads";
   if (SOCIAL_FORMATS.has(task.format)) return "active";
   return "other";
 }
@@ -170,9 +173,9 @@ export function opsBox(task, { now = new Date(), timeZone = TIMEZONE, isAgency =
   if (task.status === "Yönetici Onayı") return "manager";
   if (task.status === "Müşteri Onayı") return "client";
   if (isUrgent(task, now, timeZone)) return "urgent";
-  if (task.format === "Web" || task.platform === "Web Sitesi") return "web";
+  if (task.format === "Web" || hasPlatform(task, (p) => p === "Web Sitesi")) return "web";
   if (task.format === "Rapor" || isAgency(task)) return "agency"; // "Rapor" = arayüzde "Ajans İşleri"
-  if (AD_FORMATS.has(task.format) || AD_PLATFORMS.has(task.platform)) return "ads";
+  if (AD_FORMATS.has(task.format) || hasPlatform(task, (p) => AD_PLATFORMS.has(p))) return "ads";
   return "active";
 }
 

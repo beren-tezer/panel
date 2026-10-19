@@ -7,7 +7,9 @@ import { startHarness, waitFor, sleep } from "./ui-harness.mjs";
 const h = await startHarness({ port: 5187, debugPort: 9341 });
 const { page, viewport, check, consoleProblems, send } = h;
 const base = h.url.replace("/?demo", "");
-const path = () => page(`return location.pathname + location.search;`);
+// Ekran parametreleri (?sayfa, ?marka … — sayfa yenilemede kalınan ekran) yönlendirme kararının parçası değildir.
+const path = () => page(`const q = new URLSearchParams(location.search); ["sayfa", "sekme", "marka", "gorev", "icerik", "toplu"].forEach((k) => q.delete(k));
+  const s = q.toString().replace(/=(&|$)/g, "$1"); return location.pathname + (s ? "?" + s : "");`);
 const onAgreement = () => page(`return !!$("[data-agreement]") && !$("[data-brand-card]") && !$("[data-employee-boxes]") && !$("aside");`);
 const login = async (email) => {
   await waitFor(() => page(`return !!$("input[aria-label='Şifre']");`), 20000);

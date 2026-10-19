@@ -12,6 +12,7 @@
 
 import { LOCKED_STATUSES, REVIEW_STATUSES, currentChecklist, incompleteMessage, missingForSubmit } from "./checklist.js";
 import { pendingRequest, validateRevisionNote } from "./approvals.js";
+import { assigneesOf, isAssignee } from "./taskPeople.js";
 
 export const ROLES = ["admin", "employee", "client"];
 export const ROLE_LABELS = { admin: "Admin", employee: "Çalışan", client: "Müşteri" };
@@ -137,7 +138,7 @@ export function canSeeTask(user, task, state) {
   const p = permissionsFor(user);
   if (p.has("canViewAllBrands")) return true;
   if (roleOf(user) === "client") return p.has("canViewContent") && CLIENT_VISIBLE_STATUSES.has(task.status) && canSeeBrand(user, task.brandId, state);
-  return p.has("canViewTasks") && task.assigneeId === user.id;
+  return p.has("canViewTasks") && isAssignee(task, user.id);
 }
 
 /* Kullanıcının görebileceği veri dilimi. Tüm ekranlar bu dilimle çalışır; filtrelenmiş veri asla
@@ -154,7 +155,7 @@ export function scopeState(user, state) {
   tasks.forEach((t) => brandIds.add(t.brandId)); // atanmış görevin markası da görünür
   const brands = state.brands.filter((b) => brandIds.has(b.id));
   const memberships = state.memberships.filter((m) => brandIds.has(m.brandId));
-  const related = new Set([user.id, ...memberships.map((m) => m.userId), ...tasks.map((t) => t.assigneeId).filter(Boolean)]);
+  const related = new Set([user.id, ...memberships.map((m) => m.userId), ...tasks.flatMap(assigneesOf)]);
   const users = state.users.filter((u) => related.has(u.id) || (!isClient && u.role === "admin"));
   return {
     ...state,
@@ -191,15 +192,15 @@ function scopeContent(isClient, taskIds, state) {
 export function canEditContentVersion(user, task, state) {
   if (!task || !canSeeTask(user, task, state)) return false;
   const p = permissionsFor(user);
-  return roleOf(user) === "admin" || (roleOf(user) === "employee" && p.has("canEditContent") && task.assigneeId === user.id);
+  return roleOf(user) === "admin" || (roleOf(user) === "employee" && p.has("canEditContent") && isAssignee(task, user.id));
 }
 
 /* ───────────────────────── İşlem yetkilendirme ───────────────────────── */
 
-const ASSIGN_FIELDS = new Set(["assigneeId", "reporterId", "brandId", "dueDate", "dueTime", "priority", "checklistDisabled"]);
+const ASSIGN_FIELDS = new Set(["assigneeId", "assigneeIds", "reporterId", "brandId", "dueDate", "dueTime", "priority", "checklistDisabled"]);
 /* Görevi Veren / Takipçi yalnızca aktif bir admin olabilir (veritabanında 012 tetikleyicisi). */
 const reporterOk = (state, id) => !id || state.users.some((u) => u.id === id && u.role === "admin" && u.active !== false);
-const CONTENT_FIELDS = new Set(["title", "description", "platform", "format", "publishDate"]);
+const CONTENT_FIELDS = new Set(["title", "description", "platform", "platforms", "format", "publishDate"]);
 const DENIED = "Bu işlem için yetkiniz yok.";
 
 /* null döndürürse işlem uygulanır; aksi halde kullanıcıya gösterilecek gerekçe döner. */
@@ -219,8 +220,8 @@ export function authorize(user, action, state, allStatuses) {
       const assignable = new Set(assignableUsers(state).map((u) => u.id));
       for (const t of action.tasks) {
         if (!newBrands.has(t.brandId) && !canSeeBrand(user, t.brandId, state)) return "Seçilen markalardan birine görev ekleme yetkiniz yok.";
-        if (t.assigneeId && !assignable.has(t.assigneeId)) return "Seçilen kişilerden birine görev atanamaz.";
-        if (t.assigneeId && t.assigneeId !== user.id && !p.has("canAssignTasks")) return "Görev atama yetkiniz yok.";
+        if (assigneesOf(t).some((id) => !assignable.has(id))) return "Seçilen kişilerden birine görev atanamaz.";
+        if (assigneesOf(t).some((id) => id !== user.id) && !p.has("canAssignTasks")) return "Görev atama yetkiniz yok.";
       }
       return null;
     }
@@ -327,7 +328,7 @@ export function canViewBrandKit(user, brandId, state) {
   if (p.has("canViewAllBrands")) return true;
   const member = state.memberships.some((m) => m.userId === user.id && m.brandId === brandId);
   if (roleOf(user) === "client") return member && p.has("canViewBrandFiles");
-  return member || state.tasks.some((t) => t.brandId === brandId && t.assigneeId === user.id);
+  return member || state.tasks.some((t) => t.brandId === brandId && isAssignee(t, user.id));
 }
 
 export function canEditBrandKit(user, brandId, state) {
@@ -367,7 +368,7 @@ export function canViewChecklist(user, task, state) {
 export function canWorkChecklist(user, task, state) {
   if (!canViewChecklist(user, task, state)) return false;
   const p = permissionsFor(user);
-  return roleOf(user) === "admin" || (p.has("canUpdateTasks") && task.assigneeId === user.id);
+  return roleOf(user) === "admin" || (p.has("canUpdateTasks") && isAssignee(task, user.id));
 }
 
 export function canManageChecklists(user, brandId, state) {
@@ -376,7 +377,7 @@ export function canManageChecklists(user, brandId, state) {
   if (roleOf(user) === "admin") return true;
   if (!brandId) return false;
   return state.memberships.some((m) => m.userId === user.id && m.brandId === brandId)
-    || state.tasks.some((t) => t.brandId === brandId && t.assigneeId === user.id);
+    || state.tasks.some((t) => t.brandId === brandId && isAssignee(t, user.id));
 }
 
 /* Madde işaretleme / not için gerekçe (null = izinli). */

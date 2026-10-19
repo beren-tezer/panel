@@ -32,6 +32,7 @@ import { disablePush, enablePush, pushPermission } from "./push.js";
 import { createSupabaseBrandKit } from "./brandKit.js";
 import { signedInWithEmailLink } from "./passwords.js";
 import { rowToAgreementText } from "./agreement.js";
+import { peoplePatch, withPeople } from "./taskPeople.js";
 import { CALLBACK_PATH, PASSWORD_TYPES, clearNeedsPassword, markNeedsPassword, needsPassword } from "./authCallback.js";
 import { CONTENT_BUCKET, MAX_CONTENT_BYTES, latestVersion, pendingRequest, validateContentFile } from "./approvals.js";
 import {
@@ -88,7 +89,7 @@ export function createMemorySource(buildDemo, { checklist = null, content = null
       const demo = buildDemo(checklist);
       taskNo = 1000;
       demo.state.tasks.forEach((t) => { const n = Number(String(t.code || "").replace("CW-", "")); if (n > taskNo) taskNo = n; });
-      demo.state.features = { checklists: !!checklist, approvals: !!content };
+      demo.state.features = { checklists: !!checklist, approvals: !!content, multiAssign: true };
       demo.state.agreementText = agreementText;
       return demo;
     },
@@ -202,6 +203,7 @@ function emulateChecklistServer(api, action, prev, next, merge, actorId) {
 /* Uygulama alanı → veritabanı sütunu. Boş string tarih/sorumlu değerleri null olarak yazılır. */
 const TASK_COLUMNS = {
   brandId: "brand_id", title: "title", platform: "platform", format: "format", assigneeId: "assignee_id", reporterId: "reporter_id",
+  assigneeIds: "assignee_ids", platforms: "platforms", // 013: çoklu Görevi Yapan / Platform (ilk eleman = assignee_id / platform)
   status: "status", priority: "priority", publishDate: "publish_date", dueDate: "due_date", dueTime: "due_time",
   description: "description", createdAt: "created_at", updatedAt: "updated_at", checklistDisabled: "checklist_disabled",
 };
@@ -222,17 +224,26 @@ function toColumns(obj, map) {
   return row;
 }
 
-const rowToTask = (r) => ({
+const rowToTask = (r) => withPeople({
   id: r.id, code: taskCode(r.task_no), brandId: r.brand_id, title: r.title, platform: r.platform || "", format: r.format,
-  assigneeId: r.assignee_id || "", reporterId: r.reporter_id || "", status: r.status, priority: r.priority, publishDate: r.publish_date || "", dueDate: r.due_date || "",
+  // 013 öncesi şemada liste sütunları yoktur: liste tek değerden oluşur (withPeople).
+  assigneeId: r.assignee_id || "", reporterId: r.reporter_id || "",
+  ...(Array.isArray(r.assignee_ids) ? { assigneeIds: r.assignee_ids } : {}), ...(Array.isArray(r.platforms) ? { platforms: r.platforms } : {}), status: r.status, priority: r.priority, publishDate: r.publish_date || "", dueDate: r.due_date || "",
   dueTime: r.due_time ? String(r.due_time).slice(0, 5) : "",
   description: r.description || "", createdAt: r.created_at, updatedAt: r.updated_at, checklistDisabled: r.checklist_disabled === true,
 });
-/* 012 çalıştırılmamışsa (tasks.reporter_id yok) Görevi Veren yazılmaz; görev kaydı yine çalışır. load() denetler. */
+/* 012 çalıştırılmamışsa (tasks.reporter_id yok) Görevi Veren yazılmaz; görev kaydı yine çalışır. load() denetler.
+   013 çalıştırılmamışsa (tasks.assignee_ids / platforms yok) yalnızca ilk kişi / platform yazılır; arayüz de tek seçime iner
+   (state.features.multiAssign = false), böylece seçilen ama kaydedilmeyen kişi olmaz. */
 let reporterColumn = true;
-const withoutMissing = (row) => { if (!reporterColumn) delete row.reporter_id; return row; };
+let multiColumns = true;
+const withoutMissing = (row) => {
+  if (!reporterColumn) delete row.reporter_id;
+  if (!multiColumns) { delete row.assignee_ids; delete row.platforms; }
+  return row;
+};
 const taskToRow = (t) => {
-  const row = withoutMissing({ id: t.id, ...toColumns(t, TASK_COLUMNS) });
+  const row = withoutMissing({ id: t.id, ...toColumns(withPeople(t), TASK_COLUMNS) });
   if (!row.checklist_disabled) delete row.checklist_disabled; // varsayılan değer; 006 öncesi şemayla da uyumlu
   return row;
 };
@@ -466,7 +477,7 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
         break;
       }
       case "UPDATE_TASK": {
-        const row = withoutMissing(toColumns(action.patch, TASK_COLUMNS));
+        const row = withoutMissing(toColumns(peoplePatch(action.patch), TASK_COLUMNS));
         delete row.updated_at; // veritabanı tetikleyicisi ayarlar
         if (Object.keys(row).length) {
           touch("tasks", action.id);
@@ -825,6 +836,8 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
         .then(({ data, error }) => { if (error) throw error; return data; });
       // 012 (Görevi Veren) çalıştırıldı mı? Sütun yoksa panel onsuz çalışır.
       { const { error: reporterError } = await supabase.from("tasks").select("reporter_id").limit(1); reporterColumn = !reporterError; }
+      // 013 (çoklu Görevi Yapan / Platform) çalıştırıldı mı?
+      { const { error: multiError } = await supabase.from("tasks").select("assignee_ids, platforms").limit(1); multiColumns = !multiError; }
       const [profiles, brands, members, tasks, comments, attachments, assets, activity, approvals, notifications, checklists, checklistItems, versions, contentAssets, requests, agreementTextRow] = await Promise.all([
         selectAll("profiles", "full_name"),
         selectAll("brands", "created_at"),
@@ -878,7 +891,7 @@ export function createSupabaseSource(supabase, { descriptionDebounceMs = 600, st
           contentVersions: approvalsAvailable ? versions.map(rowToVersion) : [],
           contentAssets: approvalsAvailable ? contentAssets.map(rowToContentAsset) : [],
           approvalRequests: approvalsAvailable ? requests.map(rowToRequest) : [],
-          features: { checklists: checklistsAvailable, approvals: approvalsAvailable },
+          features: { checklists: checklistsAvailable, approvals: approvalsAvailable, multiAssign: multiColumns },
           agreement,
           agreementText: rowToAgreementText(agreementTextRow),
           // Davet / sıfırlama bağlantısıyla geldi, şifresini henüz belirlemedi → /sifre-olustur.

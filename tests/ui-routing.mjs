@@ -7,7 +7,9 @@ import { startHarness, waitFor, sleep } from "./ui-harness.mjs";
 const h = await startHarness({ port: 5185, debugPort: 9339 });
 const { page, viewport, check, consoleProblems, send } = h;
 const base = h.url.replace("/?demo", "");
-const path = () => page(`return location.pathname + location.search;`);
+// Ekran parametreleri (?sayfa, ?marka … — sayfa yenilemede kalınan ekran) yönlendirme kararının parçası değildir.
+const path = () => page(`const q = new URLSearchParams(location.search); ["sayfa", "sekme", "marka", "gorev", "icerik", "toplu"].forEach((k) => q.delete(k));
+  const s = q.toString().replace(/=(&|$)/g, "$1"); return location.pathname + (s ? "?" + s : "");`);
 const role = async (r, u) => { await page(`setValue($("select[aria-label='Rol']"), ${JSON.stringify(r)});`); await sleep(300); if (u) { await page(`setValue($("select[aria-label='Görüntülenen kullanıcı']"), ${JSON.stringify(u)});`); await sleep(300); } };
 // Dashboard'un bir an bile çizilip çizilmediğini izler (marka kartı / çalışan kutusu / admin menüsü).
 const watchDashboard = () => page(`window.__dashSeen = false; window.__obs?.disconnect(); window.__obs = new MutationObserver(() => {

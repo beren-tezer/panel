@@ -15,7 +15,7 @@ TEAM = [  # kod, ad, unvan, renk, e-posta
 BRANDS = [  # ad, kısaltma, sektör, renk, görsel teması
     ("Tepe Emlak", "TE", "Gayrimenkul", "sky", "home"),
     ("Sofra Pide", "SP", "Restoran & Yemek", "red", "food"),
-    ("Mavitur TR/ENG", "MX", "Turizm & Turlar", "indigo", "travel"),
+    ("Mavitur TR/ENG", "MV", "Turizm & Turlar", "indigo", "travel"),
     ("3 Kartal Perde", "3K", "Ev Dekorasyon", "amber", "decor"),
     ("Edva", "ED", "Sanat & Atölye", "emerald", "art"),
     ("Gürel Altyapı", "GA", "İnşaat", "violet", "build"),

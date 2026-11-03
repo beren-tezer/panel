@@ -26,7 +26,7 @@ create temp table _brands (name text, initials text, sector text, color text, th
 insert into _brands values
   ('Tepe Emlak', 'TE', 'Gayrimenkul', 'sky', 'home'),
   ('Sofra Pide', 'SP', 'Restoran & Yemek', 'red', 'food'),
-  ('Mavitur TR/ENG', 'MX', 'Turizm & Turlar', 'indigo', 'travel'),
+  ('Mavitur TR/ENG', 'MV', 'Turizm & Turlar', 'indigo', 'travel'),
   ('3 Kartal Perde', '3K', 'Ev Dekorasyon', 'amber', 'decor'),
   ('Edva', 'ED', 'Sanat & Atölye', 'emerald', 'art'),
   ('Gürel Altyapı', 'GA', 'İnşaat', 'violet', 'build'),

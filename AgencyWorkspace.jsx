@@ -8036,7 +8036,7 @@ function Workspace({ state, dispatch, getState, createTasks, draftScope, content
   return (
     <WorkspaceContext.Provider value={ctx}>
       <GlobalStyles />
-      <div className="cw-root h-screen w-full flex overflow-hidden bg-slate-50">
+      <div className="cw-root relative h-screen w-full flex overflow-hidden bg-slate-50">
         <Sidebar
           open={sidebarOpen}
           onClose={() => setSidebarOpen(false)}

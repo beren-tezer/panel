@@ -11,7 +11,7 @@ test("Varsayılan manifest adrese bağımsızdır (göreli start_url / scope / s
   assert.ok(m.icons.some((i) => i.sizes === "192x192") && m.icons.some((i) => i.sizes === "512x512" && i.purpose === "any"));
   assert.ok(m.icons.some((i) => i.purpose === "maskable"));
   for (const i of m.icons) assert.ok(!i.src.startsWith("/") && !/^https?:/.test(i.src), `simge göreli olmalı: ${i.src}`);
-  assert.ok(!JSON.stringify(m).includes("ornekalan"), "alan adı gömülmez");
+  assert.ok(!/https?:\/\//.test(JSON.stringify(m)), "alan adı gömülmez");
 });
 
 test("Ortam değişkenleri uygulanır; boş değer varsayılana döner", () => {
@@ -37,5 +37,5 @@ test("Service worker: sürüm gömülür, alan adı gömülmez, Supabase (başka
   assert.ok(sw.includes('"abc123"') && !sw.includes("__CW_SW_VERSION__"));
   assert.ok(sw.includes("self.registration.scope"));
   assert.ok(sw.includes("url.origin !== self.location.origin"));
-  assert.ok(!/supabase\.co|ornekalan/.test(sw));
+  assert.ok(!/supabase\.co/.test(sw));
 });

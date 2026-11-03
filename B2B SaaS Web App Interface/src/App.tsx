@@ -265,11 +265,11 @@ function Sidebar({ collapsed, canCollapse, mobileOpen, activeNav, workspaces, se
         <div className="sb-bottom" ref={userRef}>
           {collapsed && canCollapse && <button type="button" className="sb-expand" data-tip="Kenar çubuğunu genişlet" aria-label="Kenar çubuğunu genişlet" onClick={onCollapse}><ChevronRight size={16} /></button>}
           <button className="profile-button" data-tip={collapsed ? "Ahmet Yıldız" : undefined} onClick={() => setUserOpen((v) => !v)} aria-expanded={userOpen} aria-haspopup="menu">
-            <span className="avatar-user">MK<i /></span>
+            <span className="avatar-user">AY<i /></span>
             {!collapsed && <><span className="profile-copy"><strong>Ahmet Yıldız</strong><small>Ajans Yöneticisi</small></span><MoreHorizontal size={16} className="profile-more" /></>}
           </button>
           {userOpen && <div className="menu-popover user-menu" role="menu">
-            <div className="menu-user"><span className="avatar-user">MK</span><span><strong>Ahmet Yıldız</strong><small>yonetici@example.com</small></span></div>
+            <div className="menu-user"><span className="avatar-user">AY</span><span><strong>Ahmet Yıldız</strong><small>yonetici@example.com</small></span></div>
             <div className="menu-sep" />
             <button role="menuitem" onClick={() => { setUserOpen(false); onProfile(); }}><User size={15} /> Profilim</button>
             <button role="menuitem" onClick={() => { setUserOpen(false); onNavigate("Ajans Ayarları"); }}><Settings size={15} /> Hesap Ayarları</button>
@@ -502,7 +502,7 @@ function WorkspaceModal({ onClose, onCreate }: { onClose: () => void; onCreate: 
 function ProfileModal({ onClose, workspace }: { onClose: () => void; workspace: string }) {
   return <ModalShell title="Profilim" onClose={onClose} narrow>
     <div className="profile-modal">
-      <div className="profile-hero"><span className="profile-modal-avatar">MK</span><div><strong>Ahmet Yıldız</strong><span>Ajans Yöneticisi</span></div><span className="profile-state"><span /> Aktif</span></div>
+      <div className="profile-hero"><span className="profile-modal-avatar">AY</span><div><strong>Ahmet Yıldız</strong><span>Ajans Yöneticisi</span></div><span className="profile-state"><span /> Aktif</span></div>
       <dl>
         <div><dt>E-posta</dt><dd>yonetici@example.com</dd></div>
         <div><dt>Yetki</dt><dd><ShieldCheck size={14} /> Ajans Yöneticisi</dd></div>

@@ -77,10 +77,13 @@ export const can = (user, permission) => permissionsFor(user).has(permission);
 export const roleOf = (user) => (user && ROLES.includes(user.role) ? user.role : "employee");
 
 /* "Başka kullanıcı olarak görüntüle" (rol değiştirici, "Portalı Görüntüle") yalnızca bu hesaplara açıktır. Diğer adminler,
-   çalışanlar ve müşteriler kullanamaz. Görüntüleme kişinin kendi oturumunda olur: veritabanı yetkisi değişmez, değişiklik yapılamaz. */
-export const IMPERSONATION_ALLOWLIST = ["sahip@example.com"];
-export const canImpersonate = (user) =>
-  !!user && user.active !== false && IMPERSONATION_ALLOWLIST.includes(String(user.email || "").trim().toLowerCase());
+   çalışanlar ve müşteriler kullanamaz. Görüntüleme kişinin kendi oturumunda olur: veritabanı yetkisi değişmez, değişiklik yapılamaz.
+   Liste koda yazılmaz: .env içinde VITE_IMPERSONATION_EMAILS=a@ornek.com,b@ornek.com (boşsa kimse kullanamaz). */
+export const parseEmailList = (value) =>
+  String(value || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+export const IMPERSONATION_ALLOWLIST = parseEmailList(import.meta.env?.VITE_IMPERSONATION_EMAILS);
+export const canImpersonate = (user, allowlist = IMPERSONATION_ALLOWLIST) =>
+  !!user && user.active !== false && allowlist.includes(String(user.email || "").trim().toLowerCase());
 
 /* ───────────────────────── İş akışı ───────────────────────── */
 

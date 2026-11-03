@@ -15,7 +15,7 @@ const pre = [
   ["Derleme: manifest.webmanifest, sw.js, simgeler ve .htaccess üretildi", ["manifest.webmanifest", "sw.js", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png", ".htaccess"].every((p) => existsSync(join(out, p)))],
   ["sw.js sürümlüdür (yer tutucu kalmadı)", /const VERSION = "[0-9a-f]{12}"/.test(file("sw.js")) && !file("sw.js").includes("__CW_SW_VERSION__")],
   ["index.html: manifest, theme-color, apple-touch-icon", /rel="manifest" href="\/manifest\.webmanifest"/.test(file("index.html")) && file("index.html").includes('name="theme-color"') && file("index.html").includes("apple-touch-icon")],
-  ["Derlemede alan adı gömülü değil (manifest + sw)", !/ornekalan|https?:\/\//.test(file("manifest.webmanifest")) && !/ornekalan/.test(file("sw.js"))],
+  ["Derlemede alan adı gömülü değil (manifest + sw)", !/https?:\/\//.test(file("manifest.webmanifest")) && !/supabase\.co/.test(file("sw.js"))],
 ];
 
 const h = await startHarness({ port: 5188, debugPort: 9342, viteArgs: ["preview", "--outDir", out] });

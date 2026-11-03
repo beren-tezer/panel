@@ -1009,12 +1009,14 @@ function Btn({ variant = "secondary", size = "md", className = "", children, ...
   return <button type="button" className={`${base} ${sizes[size]} ${variants[variant]} ${className}`} {...rest}>{children}</button>;
 }
 
-/* Atlas Ajans logosu (public/icons/brand-logo.png, 1000×141, saydam zemin). Yükseklik verilir, genişlik orana göre hesaplanır;
-   width/height öznitelikleri görsel yüklenmeden yer ayırır (sayfa kaymaz). */
-const LOGO_SRC = `${import.meta.env?.BASE_URL || "/"}icons/brand-logo.png`;
+/* AgencyOS yazı logosu (görsel dosyası yok). Yükseklik verilir, yazı boyutu ona göre hesaplanır. */
 function LogoImage({ height = 24, className = "" }) {
-  return <img src={LOGO_SRC} alt="Atlas Ajans" width={Math.round((height * 1000) / 141)} height={height} draggable={false}
-    className={`block shrink-0 max-w-full h-auto object-contain object-left select-none ${className}`} style={{ maxHeight: height }} />;
+  return (
+    <span role="img" aria-label="AgencyOS" className={`block shrink-0 whitespace-nowrap select-none font-extrabold tracking-tight leading-none text-slate-900 ${className}`}
+      style={{ fontSize: Math.round(height * 0.92), height, lineHeight: `${height}px` }}>
+      agency<span className="text-orange-600">OS</span>
+    </span>
+  );
 }
 
 function Avatar({ userId, size = 20 }) {
@@ -8320,7 +8322,7 @@ function LoginScreen({ auth }) {
     <FullScreenMessage>
       <div className="mb-6">
         <LogoImage height={32} />
-        <p className="mt-3 cw-12 text-slate-400">Workspace · Giriş</p>
+        <p className="mt-3 cw-12 text-slate-400">Panele Giriş</p>
       </div>
       {status.name === "sent" ? (
         <div role="status" className="cw-13 text-slate-700">

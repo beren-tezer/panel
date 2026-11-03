@@ -19,7 +19,7 @@ import { loadEnv } from "vite";
 
 const DEFAULTS = {
   name: "AgencyOS",
-  shortName: "Atlas Ajans",
+  shortName: "AgencyOS",
   startUrl: "./",
   scope: "./",
   themeColor: "#00ADA7", // üst bant renk geçişinin ilk rengi (tarayıcı / uygulama penceresi başlığı)
@@ -51,7 +51,7 @@ export function buildManifest(env = {}) {
     id: m.startUrl,
     name: m.name,
     short_name: m.shortName,
-    description: "Atlas Ajans ajans içerik, görev ve müşteri onay paneli",
+    description: "AgencyOS — ajans içerik, görev ve müşteri onay paneli",
     lang: "tr",
     dir: "ltr",
     start_url: m.startUrl,

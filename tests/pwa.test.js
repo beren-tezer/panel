@@ -17,7 +17,7 @@ test("Varsayılan manifest adrese bağımsızdır (göreli start_url / scope / s
 test("Ortam değişkenleri uygulanır; boş değer varsayılana döner", () => {
   const m = buildManifest({ VITE_APP_NAME: "Örnek Panel", VITE_PWA_START_URL: "./dashboard", VITE_PWA_SCOPE: "./", VITE_THEME_COLOR: "#112233", VITE_APP_SHORT_NAME: "  " });
   assert.equal(m.name, "Örnek Panel");
-  assert.equal(m.short_name, "Atlas Ajans");
+  assert.equal(m.short_name, "AgencyOS");
   assert.equal(m.start_url, "./dashboard");
   assert.equal(m.id, "./dashboard");
   assert.equal(m.theme_color, "#112233");

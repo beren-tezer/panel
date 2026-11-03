@@ -8,3 +8,7 @@ dist
 *.pre-*.js
 *.pre-*.jsx
 *.backup.jsx
+
+# Araçların ürettiği dosyalar (Supabase CLI bağlantısı, Python önbelleği)
+supabase/.temp/
+__pycache__/

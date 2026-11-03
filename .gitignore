@@ -12,3 +12,6 @@ dist
 # Araçların ürettiği dosyalar (Supabase CLI bağlantısı, Python önbelleği)
 supabase/.temp/
 __pycache__/
+
+# Vercel CLI bağlantısı
+.vercel
